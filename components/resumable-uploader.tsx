@@ -29,6 +29,7 @@ export interface QueuedFile {
   id: string;
   file: File;
   progress: number;
+  loadedBytes?: number;
   status: UploadItemStatus;
   error?: string;
 }
@@ -37,7 +38,7 @@ function putViaXhr(params: {
   uploadUrl: string;
   file: File;
   mimeType: string;
-  onProgress: (percent: number) => void;
+  onProgress: (percent: number, loadedBytes?: number) => void;
 }): Promise<string> {
   const { uploadUrl, file, mimeType, onProgress } = params;
 
@@ -50,7 +51,7 @@ function putViaXhr(params: {
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable && event.total > 0) {
         lastPct = Math.min(96, Math.round((event.loaded / event.total) * 95));
-        onProgress(lastPct);
+        onProgress(lastPct, event.loaded);
       }
     };
 
@@ -94,7 +95,7 @@ async function putViaFetchFallback(params: {
   uploadUrl: string;
   file: File;
   mimeType: string;
-  onProgress: (percent: number) => void;
+  onProgress: (percent: number, loadedBytes?: number) => void;
 }): Promise<string> {
   const { uploadUrl, file, mimeType, onProgress } = params;
   onProgress(15);
@@ -131,7 +132,7 @@ async function putViaFetchFallback(params: {
 export async function uploadFileResumable(params: {
   eventoId: string;
   file: File;
-  onProgress: (percent: number) => void;
+  onProgress: (percent: number, loadedBytes?: number) => void;
   onPhaseChange?: (phase: UploadItemStatus) => void;
 }): Promise<void> {
   const { eventoId, file, onProgress, onPhaseChange } = params;
@@ -240,24 +241,52 @@ export function ResumableUploader({
 }: ResumableUploaderProps) {
   const [internalFiles, setInternalFiles] = useState<QueuedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [preparingSelection, setPreparingSelection] = useState(false);
   const nativeInputRef = useRef<HTMLInputElement | null>(null);
+  const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const files = controlledFiles ?? internalFiles;
   const setFiles = onFilesChange ?? setInternalFiles;
 
+  const stopPreparing = useCallback(() => {
+    if (cancelTimerRef.current) {
+      clearTimeout(cancelTimerRef.current);
+      cancelTimerRef.current = null;
+    }
+    setPreparingSelection(false);
+  }, []);
+
   const appendFiles = useCallback(
     (selected: File[]) => {
+      stopPreparing();
       if (!selected.length) return;
       const novos: QueuedFile[] = selected.map((file) => ({
         id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
         file,
         progress: 0,
+        loadedBytes: 0,
         status: "pending",
       }));
       setFiles((prev) => [...prev, ...novos]);
+      toast.success(
+        `${selected.length} arquivo${selected.length > 1 ? "s" : ""} pronto${selected.length > 1 ? "s" : ""} para envio.`
+      );
     },
-    [setFiles]
+    [setFiles, stopPreparing]
   );
+
+  function openNativePicker() {
+    setPreparingSelection(true);
+    // Se o usuário cancelar no iOS sem disparar onChange, limpa o aviso ao voltar o foco
+    const handleWindowFocus = () => {
+      cancelTimerRef.current = setTimeout(() => {
+        setPreparingSelection(false);
+      }, 2500);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+    window.addEventListener("focus", handleWindowFocus);
+    nativeInputRef.current?.click();
+  }
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
@@ -312,9 +341,13 @@ export function ResumableUploader({
           await uploadFileResumable({
             eventoId,
             file: item.file,
-            onProgress: (progress) => {
+            onProgress: (progress, loadedBytes) => {
               setFiles((prev) =>
-                prev.map((f) => (f.id === item.id ? { ...f, progress } : f))
+                prev.map((f) =>
+                  f.id === item.id
+                    ? { ...f, progress, loadedBytes: loadedBytes ?? f.loadedBytes }
+                    : f
+                )
               );
             },
             onPhaseChange: (status) => {
@@ -400,14 +433,26 @@ export function ResumableUploader({
             disabled={disabled || isUploading}
             onClick={(e) => {
               e.stopPropagation();
-              nativeInputRef.current?.click();
+              openNativePicker();
             }}
           >
             <Upload className="h-3.5 w-3.5" />
             Selecionar da Galeria / Arquivos
           </Button>
         </div>
+        <p className="text-[11px] text-muted-foreground/80 mt-3 max-w-md mx-auto">
+          Dica no iPhone: ao escolher vídeos grandes na Biblioteca de Fotos, o iOS prepara o vídeo antes de retornar ao site. Para carregar mais rápido, toque em <strong>Opções → Formato: Atual</strong> ou selecione 1 vídeo por vez.
+        </p>
       </div>
+
+      {preparingSelection && (
+        <div className="flex items-center gap-2.5 rounded-lg border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-xs text-primary animate-fade-in">
+          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          <span>
+            Aguardando o celular preparar os arquivos selecionados... Vídeos grandes podem levar alguns segundos antes de aparecerem na lista.
+          </span>
+        </div>
+      )}
 
       {files.length > 0 && (
         <div className="space-y-2.5">
@@ -463,8 +508,10 @@ export function ResumableUploader({
                           {item.file.name}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {formatarTamanhoArquivo(item.file.size)}
-                          {item.status === "uploading" && ` • Enviando (${item.progress}%)`}
+                          {item.status === "uploading" && item.loadedBytes
+                            ? `${formatarTamanhoArquivo(item.loadedBytes)} de ${formatarTamanhoArquivo(item.file.size)} • ${item.progress}%`
+                            : formatarTamanhoArquivo(item.file.size)}
+                          {item.status === "uploading" && !item.loadedBytes && ` • Enviando (${item.progress}%)`}
                           {item.status === "finalizing" && " • Finalizando..."}
                           {item.status === "done" && " • Concluído"}
                         </p>

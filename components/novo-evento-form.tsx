@@ -181,10 +181,12 @@ export function NovoEventoForm({
                 await uploadFileResumable({
                   eventoId,
                   file: item.file,
-                  onProgress: (progress) => {
+                  onProgress: (progress, loadedBytes) => {
                     setFiles((prev) =>
                       prev.map((f) =>
-                        f.id === item.id ? { ...f, progress } : f
+                        f.id === item.id
+                          ? { ...f, progress, loadedBytes: loadedBytes ?? f.loadedBytes }
+                          : f
                       )
                     );
                   },
