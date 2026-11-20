@@ -84,8 +84,13 @@ export async function POST(req: Request) {
       await updateEventoDoc(evento.id, { driveFolderId: eventoFolderId });
     }
 
-    // Garante header Origin exato para que o Google Drive libere CORS no PUT em chunks do navegador
-    const origin = req.headers.get("origin") || new URL(req.url).origin;
+    // Garante header Origin exato para que o Google Drive libere CORS no PUT direto do navegador
+    const originFromBody =
+      typeof body?.origin === "string" && body.origin.startsWith("http")
+        ? body.origin
+        : null;
+    const origin =
+      req.headers.get("origin") || originFromBody || new URL(req.url).origin;
 
     const { uploadUrl } = await createResumableUploadSession({
       fileName,
@@ -95,7 +100,7 @@ export async function POST(req: Request) {
       origin,
     });
 
-    return NextResponse.json({ uploadUrl });
+    return NextResponse.json({ uploadUrl, resolvedOrigin: origin });
   } catch (err) {
     console.error("[GoogleDrive] Erro ao gerar sessão resumível:", err);
     return NextResponse.json(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
 import {
@@ -33,9 +33,7 @@ export interface QueuedFile {
   error?: string;
 }
 
-const MAX_UPLOAD_RETRIES = 2;
-
-function putFileDirectToDrive(params: {
+function putViaXhr(params: {
   uploadUrl: string;
   file: File;
   mimeType: string;
@@ -45,13 +43,14 @@ function putFileDirectToDrive(params: {
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let lastPct = 1;
     xhr.open("PUT", uploadUrl, true);
     xhr.setRequestHeader("Content-Type", mimeType);
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable && event.total > 0) {
-        const pct = Math.min(96, Math.round((event.loaded / event.total) * 95));
-        onProgress(pct);
+        lastPct = Math.min(96, Math.round((event.loaded / event.total) * 95));
+        onProgress(lastPct);
       }
     };
 
@@ -63,14 +62,15 @@ function putFileDirectToDrive(params: {
             resolve(parsed.id);
             return;
           }
-          reject(new Error("Resposta do Google Drive sem ID do arquivo."));
+          reject(new Error("[Etapa 2] Resposta do Google Drive sem ID do arquivo."));
         } catch {
-          reject(new Error("Erro ao interpretar resposta do Google Drive."));
+          reject(new Error("[Etapa 2] Erro ao interpretar resposta do Google Drive."));
         }
       } else {
+        const snippet = (xhr.responseText || "").slice(0, 140);
         reject(
           new Error(
-            `Falha no envio direto ao Google Drive (HTTP ${xhr.status}).`
+            `[Etapa 2] Google Drive retornou HTTP ${xhr.status}${snippet ? `: ${snippet}` : ""}`
           )
         );
       }
@@ -79,25 +79,53 @@ function putFileDirectToDrive(params: {
     xhr.onerror = () => {
       reject(
         new Error(
-          "Falha de rede durante o envio direto ao Google Drive. Verifique sua conexão e tente novamente."
+          `XHR_NETWORK_ERROR (progresso: ${lastPct}%, tamanho: ${formatarTamanhoArquivo(file.size)}, tipo: ${mimeType})`
         )
       );
     };
 
-    xhr.onabort = () => {
-      reject(new Error("Envio cancelado."));
-    };
+    xhr.onabort = () => reject(new Error("[Etapa 2] Envio cancelado."));
 
-    // Envia o File direto em streaming nativo do navegador (evita 308/CORS quebrado no iOS Safari)
     xhr.send(file);
   });
+}
+
+async function putViaFetchFallback(params: {
+  uploadUrl: string;
+  file: File;
+  mimeType: string;
+  onProgress: (percent: number) => void;
+}): Promise<string> {
+  const { uploadUrl, file, mimeType, onProgress } = params;
+  onProgress(15);
+
+  const res = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": mimeType },
+    body: file,
+    mode: "cors",
+  });
+
+  if (!res.ok) {
+    const txt = (await res.text().catch(() => "")).slice(0, 140);
+    throw new Error(
+      `[Etapa 2 - Fallback] Google Drive retornou HTTP ${res.status}${txt ? `: ${txt}` : ""}`
+    );
+  }
+
+  const parsed = (await res.json().catch(() => ({}))) as { id?: string };
+  if (!parsed?.id) {
+    throw new Error("[Etapa 2 - Fallback] Resposta do Google Drive sem ID.");
+  }
+  onProgress(95);
+  return parsed.id;
 }
 
 /**
  * Executa o fluxo completo de Resumable Upload direto para o Google Drive (ZERO tráfego na Vercel):
  * 1. POST /api/drive/init-upload -> envia apenas metadados leves (~200 bytes) e obtém a `uploadUrl`
- * 2. PUT direto em streaming do navegador (iOS Safari, Android, Desktop) para a `uploadUrl` do Google Drive
- *    com barra de progresso real (sem passar binário pela Vercel e sem `308` que quebra no Safari iOS)
+ * 2. PUT direto do navegador (iOS Safari, Android, Desktop) para a `uploadUrl` do Google Drive
+ *    com barra de progresso real e fallback automático para `fetch` em caso de erro XHR no WebKit iOS
  * 3. POST /api/drive/finalize-upload -> envia apenas o `driveFileId` para aplicar permissão pública e salvar no Firestore
  */
 export async function uploadFileResumable(params: {
@@ -111,56 +139,61 @@ export async function uploadFileResumable(params: {
   const totalSize = file.size;
 
   if (!totalSize || totalSize <= 0) {
-    throw new Error("O arquivo selecionado está vazio ou não pôde ser lido.");
+    throw new Error(
+      "O arquivo selecionado está vazio ou o iPhone não liberou o vídeo. Tente selecionar novamente pela Fototeca."
+    );
   }
 
   onPhaseChange?.("uploading");
-  onProgress(1);
+  onProgress(2);
 
-  let driveFileId: string | null = null;
-  let lastError: Error | null = null;
+  // 1. Inicia sessão de Resumable Upload no backend (apenas JSON de metadados)
+  const initSession = async (): Promise<string> => {
+    const sessionRes = await fetch("/api/drive/init-upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventoId,
+        fileName: file.name,
+        mimeType,
+        fileSize: totalSize,
+        origin: typeof window !== "undefined" ? window.location.origin : undefined,
+      }),
+    });
 
-  for (let attempt = 1; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
-    try {
-      // 1. Inicia sessão de Resumable Upload no backend (apenas JSON de metadados)
-      const sessionRes = await fetch("/api/drive/init-upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          eventoId,
-          fileName: file.name,
-          mimeType,
-          fileSize: totalSize,
-        }),
-      });
+    const sessionData = await sessionRes.json().catch(() => ({}));
+    if (!sessionRes.ok || !sessionData.uploadUrl) {
+      throw new Error(
+        `[Etapa 1] ${sessionData.error || `Falha ao iniciar upload (HTTP ${sessionRes.status})`}`
+      );
+    }
+    return sessionData.uploadUrl as string;
+  };
 
-      const sessionData = await sessionRes.json().catch(() => ({}));
-      if (!sessionRes.ok || !sessionData.uploadUrl) {
-        throw new Error(
-          sessionData.error || "Não foi possível iniciar o envio do arquivo."
-        );
-      }
+  let driveFileId: string;
+  const uploadUrl = await initSession();
 
-      // 2. Envia o arquivo diretamente do navegador ao Google Drive (streaming nativo, 100% compatível com iPhone/Safari)
-      driveFileId = await putFileDirectToDrive({
-        uploadUrl: sessionData.uploadUrl,
+  // 2. Tenta PUT via XHR (progresso granular). Se o iOS Safari falhar no XHR com erro de rede/WebKit, tenta nova sessão via fetch()
+  try {
+    driveFileId = await putViaXhr({
+      uploadUrl,
+      file,
+      mimeType,
+      onProgress,
+    });
+  } catch (xhrErr) {
+    const msg = xhrErr instanceof Error ? xhrErr.message : "";
+    if (msg.startsWith("XHR_NETWORK_ERROR")) {
+      const freshUrl = await initSession();
+      driveFileId = await putViaFetchFallback({
+        uploadUrl: freshUrl,
         file,
         mimeType,
         onProgress,
       });
-      break;
-    } catch (err) {
-      lastError =
-        err instanceof Error ? err : new Error("Falha ao enviar o arquivo.");
-      if (attempt < MAX_UPLOAD_RETRIES) {
-        onProgress(1);
-        await new Promise((r) => setTimeout(r, 1200));
-      }
+    } else {
+      throw xhrErr;
     }
-  }
-
-  if (!driveFileId) {
-    throw lastError || new Error("Falha ao concluir upload no Google Drive.");
   }
 
   // 3. Finaliza permissão pública (`anyone` + `reader`) e registra metadados no Firestore
@@ -182,7 +215,7 @@ export async function uploadFileResumable(params: {
   const finalizeData = await finalizeRes.json().catch(() => ({}));
   if (!finalizeRes.ok) {
     throw new Error(
-      finalizeData.error || "Arquivo enviado, mas falhou ao registrar no sistema."
+      `[Etapa 3] ${finalizeData.error || "Arquivo enviado, mas falhou ao registrar no sistema."}`
     );
   }
 
@@ -191,12 +224,9 @@ export async function uploadFileResumable(params: {
 }
 
 interface ResumableUploaderProps {
-  /** Se informado, permite enviar imediatamente para este evento */
   eventoId?: string;
-  /** Modo controlado (usado no formulário de criação antes do evento existir) */
   files?: QueuedFile[];
   onFilesChange?: React.Dispatch<React.SetStateAction<QueuedFile[]>>;
-  /** Callback após concluir uploads no modo standalone */
   onUploadComplete?: () => void;
   disabled?: boolean;
 }
@@ -210,14 +240,15 @@ export function ResumableUploader({
 }: ResumableUploaderProps) {
   const [internalFiles, setInternalFiles] = useState<QueuedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const nativeInputRef = useRef<HTMLInputElement | null>(null);
 
   const files = controlledFiles ?? internalFiles;
   const setFiles = onFilesChange ?? setInternalFiles;
 
-  const onDrop = useCallback(
-    (acceptedFiles: File[]) => {
-      if (!acceptedFiles.length) return;
-      const novos: QueuedFile[] = acceptedFiles.map((file) => ({
+  const appendFiles = useCallback(
+    (selected: File[]) => {
+      if (!selected.length) return;
+      const novos: QueuedFile[] = selected.map((file) => ({
         id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
         file,
         progress: 0,
@@ -228,14 +259,28 @@ export function ResumableUploader({
     [setFiles]
   );
 
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      appendFiles(acceptedFiles);
+    },
+    [appendFiles]
+  );
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     disabled: disabled || isUploading,
-    accept: {
-      "image/*": [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".gif"],
-      "video/*": [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".3gp"],
+    useFsAccessApi: false,
+    noClick: false,
+    onDropRejected: () => {
+      toast.error("Não foi possível adicionar este arquivo. Tente novamente.");
     },
   });
+
+  function handleNativeFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const list = e.target.files ? Array.from(e.target.files) : [];
+    appendFiles(list);
+    e.target.value = "";
+  }
 
   function removeFile(id: string) {
     setFiles((prev) => prev.filter((item) => item.id !== id));
@@ -252,9 +297,14 @@ export function ResumableUploader({
     let successCount = 0;
     let errorCount = 0;
 
-    // Envia até 2 arquivos simultaneamente para equilibrar banda e estabilidade
+    // Se houver vídeo na fila, envia 1 por vez para estabilidade máxima no iPhone/4G
+    const hasVideo = pending.some((p) =>
+      inferirMimeType(p.file.name, p.file.type).startsWith("video/")
+    );
+    const concurrency = hasVideo ? 1 : Math.min(2, pending.length);
+
     const queue = [...pending];
-    const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
+    const workers = Array.from({ length: concurrency }, async () => {
       while (queue.length > 0) {
         const item = queue.shift();
         if (!item) break;
@@ -299,7 +349,7 @@ export function ResumableUploader({
       onUploadComplete?.();
     }
     if (errorCount > 0) {
-      toast.error(`${errorCount} arquivo(s) falharam no envio.`);
+      toast.error(`${errorCount} arquivo(s) falharam no envio. Veja o detalhe abaixo.`);
     }
   }
 
@@ -309,33 +359,59 @@ export function ResumableUploader({
 
   return (
     <div className="space-y-4">
+      {/* Input nativo direto para máxima compatibilidade com Fototeca/Vídeos .MOV no iPhone */}
+      <input
+        ref={nativeInputRef}
+        type="file"
+        multiple
+        accept="image/*,video/*"
+        className="hidden"
+        onChange={handleNativeFileChange}
+        disabled={disabled || isUploading}
+      />
+
       <div
         {...getRootProps()}
         className={cn(
-          "border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors",
+          "border-2 border-dashed rounded-xl p-5 sm:p-6 text-center cursor-pointer transition-colors",
           isDragActive
             ? "border-primary bg-primary/5"
             : "border-muted-foreground/25 hover:border-primary/60 hover:bg-muted/30",
           (disabled || isUploading) && "opacity-60 cursor-not-allowed"
         )}
       >
-        <input {...getInputProps()} />
+        <input {...getInputProps({ accept: "image/*,video/*" })} />
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary mb-3">
           <CloudUpload className="h-6 w-6" />
         </div>
         <p className="text-sm font-medium">
           {isDragActive
             ? "Solte as fotos e vídeos aqui..."
-            : "Arraste fotos e vídeos para cá, ou clique para selecionar"}
+            : "Arraste fotos e vídeos para cá, ou toque para selecionar"}
         </p>
         <p className="text-xs text-muted-foreground mt-1">
-          Suporte a múltiplos arquivos e vídeos pesados (MP4, MOV, JPG, PNG, HEIC) com envio direto otimizado.
+          Suporte a fotos e vídeos do celular (MOV, MP4, JPG, PNG, HEIC) com envio direto otimizado.
         </p>
+        <div className="mt-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled || isUploading}
+            onClick={(e) => {
+              e.stopPropagation();
+              nativeInputRef.current?.click();
+            }}
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Selecionar da Galeria / Arquivos
+          </Button>
+        </div>
       </div>
 
       {files.length > 0 && (
         <div className="space-y-2.5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-medium text-muted-foreground">
               {files.length} arquivo{files.length > 1 ? "s" : ""} selecionado
               {files.length > 1 ? "s" : ""}
@@ -364,8 +440,9 @@ export function ResumableUploader({
 
           <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
             {files.map((item) => {
-              const isImage = item.file.type.startsWith("image/");
-              const isVideo = item.file.type.startsWith("video/");
+              const resolvedMime = inferirMimeType(item.file.name, item.file.type);
+              const isImage = resolvedMime.startsWith("image/");
+              const isVideo = resolvedMime.startsWith("video/");
 
               return (
                 <div
@@ -375,9 +452,9 @@ export function ResumableUploader({
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2.5 min-w-0">
                       {isImage ? (
-                        <FileImage className="h-4 w-4 shrink-0 text-blue-600" />
+                        <FileImage className="h-4 w-4 shrink-0 text-primary" />
                       ) : isVideo ? (
-                        <FileVideo className="h-4 w-4 shrink-0 text-purple-600" />
+                        <FileVideo className="h-4 w-4 shrink-0 text-[#1373E6]" />
                       ) : (
                         <FileIcon className="h-4 w-4 shrink-0 text-slate-500" />
                       )}
@@ -427,7 +504,9 @@ export function ResumableUploader({
                   )}
 
                   {item.error && (
-                    <p className="text-xs text-destructive">{item.error}</p>
+                    <p className="text-xs text-destructive break-words">
+                      {item.error}
+                    </p>
                   )}
                 </div>
               );

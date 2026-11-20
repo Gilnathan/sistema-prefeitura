@@ -164,9 +164,15 @@ export function NovoEventoForm({
         let okCount = 0;
         let errCount = 0;
         const queue = [...files];
+        const hasVideo = queue.some(
+          (f) =>
+            f.file.type.startsWith("video/") ||
+            /\.(mp4|mov|m4v|webm|mkv|avi|3gp)$/i.test(f.file.name)
+        );
+        const concurrency = hasVideo ? 1 : Math.min(2, queue.length);
 
         const workers = Array.from(
-          { length: Math.min(2, queue.length) },
+          { length: concurrency },
           async () => {
             while (queue.length > 0) {
               const item = queue.shift();
