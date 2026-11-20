@@ -45,7 +45,7 @@ export async function POST(req: Request) {
   try {
     await setFilePublicReader(driveFileId);
 
-    const tipo = inferirTipoMidia(mimeType);
+    const tipo = inferirTipoMidia(mimeType, fileName);
     const midia = await upsertMidiaDoc({
       driveFileId,
       fileName,

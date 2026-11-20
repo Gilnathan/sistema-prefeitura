@@ -73,8 +73,33 @@ export function formatarTamanhoArquivo(bytes: number | bigint | string): string 
   return `${valor.toFixed(idx === 0 ? 0 : 1)} ${unidades[idx]}`;
 }
 
-export function inferirTipoMidia(mimeType: string): MidiaTipo {
-  const lower = mimeType.toLowerCase();
+export function inferirMimeType(fileName: string, mimeType?: string): string {
+  if (mimeType && mimeType.trim() && mimeType !== "application/octet-stream") {
+    return mimeType.trim();
+  }
+  const ext = fileName.split(".").pop()?.toLowerCase() || "";
+  const map: Record<string, string> = {
+    mp4: "video/mp4",
+    mov: "video/quicktime",
+    m4v: "video/x-m4v",
+    webm: "video/webm",
+    mkv: "video/x-matroska",
+    avi: "video/x-msvideo",
+    "3gp": "video/3gpp",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    heic: "image/heic",
+    heif: "image/heif",
+    gif: "image/gif",
+  };
+  return map[ext] || mimeType || "application/octet-stream";
+}
+
+export function inferirTipoMidia(mimeType: string, fileName?: string): MidiaTipo {
+  const resolved = fileName ? inferirMimeType(fileName, mimeType) : mimeType;
+  const lower = resolved.toLowerCase();
   if (lower.startsWith("image/")) return "FOTO";
   if (lower.startsWith("video/")) return "VIDEO";
   return "OUTRO";

@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { cn, formatarTamanhoArquivo } from "@/lib/utils";
+import { cn, formatarTamanhoArquivo, inferirMimeType } from "@/lib/utils";
 
 export type UploadItemStatus =
   | "pending"
@@ -33,55 +33,71 @@ export interface QueuedFile {
   error?: string;
 }
 
-// Tamanho de chunk: 8 MB (múltiplo obrigatório de 256 KB na API Resumable do Google Drive)
-const CHUNK_SIZE = 8 * 1024 * 1024;
-const MAX_CHUNK_RETRIES = 3;
+const MAX_UPLOAD_RETRIES = 2;
 
-function sendChunkXhr(params: {
+function putFileDirectToDrive(params: {
   uploadUrl: string;
-  chunk: Blob;
+  file: File;
   mimeType: string;
-  start: number;
-  end: number;
-  totalSize: number;
-  onChunkProgress: (loadedInChunk: number) => void;
-}): Promise<{ status: number; responseText: string }> {
-  const { uploadUrl, chunk, mimeType, start, end, totalSize, onChunkProgress } =
-    params;
+  onProgress: (percent: number) => void;
+}): Promise<string> {
+  const { uploadUrl, file, mimeType, onProgress } = params;
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", uploadUrl, true);
     xhr.setRequestHeader("Content-Type", mimeType);
-    xhr.setRequestHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
 
     xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        onChunkProgress(event.loaded);
+      if (event.lengthComputable && event.total > 0) {
+        const pct = Math.min(96, Math.round((event.loaded / event.total) * 95));
+        onProgress(pct);
       }
     };
 
     xhr.onload = () => {
-      resolve({ status: xhr.status, responseText: xhr.responseText });
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const parsed = JSON.parse(xhr.responseText);
+          if (parsed?.id) {
+            resolve(parsed.id);
+            return;
+          }
+          reject(new Error("Resposta do Google Drive sem ID do arquivo."));
+        } catch {
+          reject(new Error("Erro ao interpretar resposta do Google Drive."));
+        }
+      } else {
+        reject(
+          new Error(
+            `Falha no envio direto ao Google Drive (HTTP ${xhr.status}).`
+          )
+        );
+      }
     };
 
     xhr.onerror = () => {
       reject(
         new Error(
-          "Erro de rede ou CORS durante o envio direto ao Google Drive."
+          "Falha de rede durante o envio direto ao Google Drive. Verifique sua conexão e tente novamente."
         )
       );
     };
 
-    xhr.send(chunk);
+    xhr.onabort = () => {
+      reject(new Error("Envio cancelado."));
+    };
+
+    // Envia o File direto em streaming nativo do navegador (evita 308/CORS quebrado no iOS Safari)
+    xhr.send(file);
   });
 }
 
 /**
  * Executa o fluxo completo de Resumable Upload direto para o Google Drive (ZERO tráfego na Vercel):
  * 1. POST /api/drive/init-upload -> envia apenas metadados leves (~200 bytes) e obtém a `uploadUrl`
- * 2. PUT em chunks de 8 MB com `Content-Range` diretamente do navegador para o Google Drive
- *    (trata 308 Resume Incomplete entre chunks, retry automático e progresso real em vídeos de 300MB–500MB+)
+ * 2. PUT direto em streaming do navegador (iOS Safari, Android, Desktop) para a `uploadUrl` do Google Drive
+ *    com barra de progresso real (sem passar binário pela Vercel e sem `308` que quebra no Safari iOS)
  * 3. POST /api/drive/finalize-upload -> envia apenas o `driveFileId` para aplicar permissão pública e salvar no Firestore
  */
 export async function uploadFileResumable(params: {
@@ -91,95 +107,60 @@ export async function uploadFileResumable(params: {
   onPhaseChange?: (phase: UploadItemStatus) => void;
 }): Promise<void> {
   const { eventoId, file, onProgress, onPhaseChange } = params;
-  const mimeType = file.type || "application/octet-stream";
+  const mimeType = inferirMimeType(file.name, file.type);
   const totalSize = file.size;
+
+  if (!totalSize || totalSize <= 0) {
+    throw new Error("O arquivo selecionado está vazio ou não pôde ser lido.");
+  }
 
   onPhaseChange?.("uploading");
   onProgress(1);
 
-  // 1. Inicia sessão de Resumable Upload no backend (payload apenas JSON de metadados)
-  const sessionRes = await fetch("/api/drive/init-upload", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      eventoId,
-      fileName: file.name,
-      mimeType,
-      fileSize: totalSize,
-    }),
-  });
-
-  const sessionData = await sessionRes.json().catch(() => ({}));
-  if (!sessionRes.ok || !sessionData.uploadUrl) {
-    throw new Error(
-      sessionData.error || "Não foi possível iniciar o envio do arquivo."
-    );
-  }
-
-  const uploadUrl: string = sessionData.uploadUrl;
-
-  // 2. Envia os bytes diretamente do navegador para o Google Drive em chunks com Content-Range
-  let offset = 0;
   let driveFileId: string | null = null;
+  let lastError: Error | null = null;
 
-  while (offset < totalSize) {
-    const end = Math.min(offset + CHUNK_SIZE, totalSize) - 1;
-    const chunk = file.slice(offset, end + 1);
-
-    let attempt = 0;
-    let chunkDone = false;
-
-    while (!chunkDone) {
-      attempt += 1;
-      try {
-        const result = await sendChunkXhr({
-          uploadUrl,
-          chunk,
+  for (let attempt = 1; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+    try {
+      // 1. Inicia sessão de Resumable Upload no backend (apenas JSON de metadados)
+      const sessionRes = await fetch("/api/drive/init-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventoId,
+          fileName: file.name,
           mimeType,
-          start: offset,
-          end,
-          totalSize,
-          onChunkProgress: (loadedInChunk) => {
-            const totalLoaded = Math.min(totalSize, offset + loadedInChunk);
-            const pct = Math.min(96, Math.round((totalLoaded / totalSize) * 95));
-            onProgress(pct);
-          },
-        });
+          fileSize: totalSize,
+        }),
+      });
 
-        if (result.status === 308) {
-          // Google Drive confirmou o chunk intermediário
-          chunkDone = true;
-          offset = end + 1;
-        } else if (result.status >= 200 && result.status < 300) {
-          // Chunk final concluído: resposta JSON contém o ID do arquivo no Drive
-          const parsed = JSON.parse(result.responseText);
-          if (!parsed?.id) {
-            throw new Error("Resposta do Google Drive sem ID do arquivo.");
-          }
-          driveFileId = parsed.id;
-          chunkDone = true;
-          offset = totalSize;
-        } else if (
-          (result.status >= 500 || result.status === 429) &&
-          attempt < MAX_CHUNK_RETRIES
-        ) {
-          await new Promise((r) => setTimeout(r, 1000 * attempt));
-        } else {
-          throw new Error(
-            `Falha no envio direto ao Google Drive (HTTP ${result.status}).`
-          );
-        }
-      } catch (err) {
-        if (attempt >= MAX_CHUNK_RETRIES) {
-          throw err;
-        }
-        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      const sessionData = await sessionRes.json().catch(() => ({}));
+      if (!sessionRes.ok || !sessionData.uploadUrl) {
+        throw new Error(
+          sessionData.error || "Não foi possível iniciar o envio do arquivo."
+        );
+      }
+
+      // 2. Envia o arquivo diretamente do navegador ao Google Drive (streaming nativo, 100% compatível com iPhone/Safari)
+      driveFileId = await putFileDirectToDrive({
+        uploadUrl: sessionData.uploadUrl,
+        file,
+        mimeType,
+        onProgress,
+      });
+      break;
+    } catch (err) {
+      lastError =
+        err instanceof Error ? err : new Error("Falha ao enviar o arquivo.");
+      if (attempt < MAX_UPLOAD_RETRIES) {
+        onProgress(1);
+        await new Promise((r) => setTimeout(r, 1200));
       }
     }
   }
 
   if (!driveFileId) {
-    throw new Error("Upload concluído sem retorno do ID do arquivo no Google Drive.");
+    throw lastError || new Error("Falha ao concluir upload no Google Drive.");
   }
 
   // 3. Finaliza permissão pública (`anyone` + `reader`) e registra metadados no Firestore
@@ -251,8 +232,8 @@ export function ResumableUploader({
     onDrop,
     disabled: disabled || isUploading,
     accept: {
-      "image/*": [],
-      "video/*": [],
+      "image/*": [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".gif"],
+      "video/*": [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".3gp"],
     },
   });
 
