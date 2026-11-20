@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Paleta inspirada no Portal Oficial da Prefeitura de Belmonte */
+    /* Base clean: branco + azul-gelo bem leve */
+    --background: 204 45% 97.5%;
+    --foreground: 209 52% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 209 52% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 209 52% 15%;
+
+    /* Verde Belmonte — reservado para CTAs, ícones e pontos de destaque */
+    --primary: 129 76% 30%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Azul-gelo suave para chips, tags e superfícies secundárias */
+    --secondary: 204 44% 93%;
+    --secondary-foreground: 208 58% 22%;
+
+    --muted: 204 32% 94%;
+    --muted-foreground: 208 18% 45%;
+
+    --accent: 204 52% 93%;
+    --accent-foreground: 208 65% 22%;
+
+    --destructive: 0 74% 48%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 204 28% 88%;
+    --input: 204 24% 84%;
+    --ring: 205 72% 36%;
+    --radius: 0.65rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-[#1976B5]/15 selection:text-[#0E3A5D];
+  }
+}
+
+/* Micro-animações leves e fluidas */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@layer utilities {
+  .animate-fade-up {
+    animation: fadeUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.25s ease-out both;
+  }
+
+  .card-interactive {
+    @apply transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md hover:border-[#1976B5]/35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-fade-in {
+    animation: none !important;
+  }
+  .card-interactive {
+    transform: none !important;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #ffffff !important;
+  }
+}
