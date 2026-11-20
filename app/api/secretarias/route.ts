@@ -130,7 +130,7 @@ export async function POST(req: Request) {
 
   let usuarioCriado = null;
   if (criarUsuarioInicial && usuarioInicial) {
-    const passwordHash = await bcrypt.hash(usuarioInicial.password, 12);
+    const passwordHash = await bcrypt.hash(usuarioInicial.password, 10);
     const createdUser = await createUserDoc({
       name: usuarioInicial.name,
       email: usuarioInicial.email,

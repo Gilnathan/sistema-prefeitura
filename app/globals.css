@@ -70,15 +70,15 @@
 
 @layer utilities {
   .animate-fade-up {
-    animation: fadeUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: fadeUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .animate-fade-in {
-    animation: fadeIn 0.25s ease-out both;
+    animation: fadeIn 0.15s ease-out both;
   }
 
   .card-interactive {
-    @apply transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md hover:border-[#1976B5]/35;
+    @apply transition-all duration-150 ease-out hover:-translate-y-0.5 hover:shadow-md hover:border-[#1976B5]/35;
   }
 }
 

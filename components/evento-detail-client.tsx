@@ -46,7 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/status-badge";
-import { MediaGallery } from "@/components/media-gallery";
+import { MediaGallery, type InitialMidiasData } from "@/components/media-gallery";
 import { ResumableUploader } from "@/components/resumable-uploader";
 import { atualizarStatusEventoAction } from "@/app/actions/eventos";
 import { formatarDataBR, formatarDataHoraBR, formatarDataISO } from "@/lib/utils";
@@ -55,6 +55,7 @@ interface EventoDetailClientProps {
   isAdmin: boolean;
   isParceira: boolean;
   todasSecretarias: { id: string; nome: string }[];
+  initialMidias?: InitialMidiasData;
   evento: {
     id: string;
     titulo: string;
@@ -98,6 +99,7 @@ export function EventoDetailClient({
   isAdmin,
   isParceira,
   todasSecretarias,
+  initialMidias,
   evento: initialEvento,
 }: EventoDetailClientProps) {
   const router = useRouter();
@@ -491,7 +493,11 @@ export function EventoDetailClient({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <MediaGallery eventoId={evento.id} refreshTrigger={galleryRefresh} />
+          <MediaGallery
+            eventoId={evento.id}
+            refreshTrigger={galleryRefresh}
+            initialData={initialMidias}
+          />
         </CardContent>
       </Card>
 

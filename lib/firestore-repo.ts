@@ -18,6 +18,25 @@ function nowIso(): string {
 }
 
 // ============================================================================
+// CACHE LEVE EM MEMÓRIA (TTL 60s) PARA SECRETARIAS E USUÁRIOS
+// Evita round-trips repetidos no Firestore em warm lambdas da Vercel e local
+// ============================================================================
+const CACHE_TTL_MS = 60_000;
+
+const globalCache = globalThis as unknown as {
+  __belmonteSecretariasCache?: { data: SecretariaDoc[]; expiresAt: number };
+  __belmonteUsersCache?: { data: UserDoc[]; expiresAt: number };
+};
+
+export function invalidateSecretariasCache() {
+  globalCache.__belmonteSecretariasCache = undefined;
+}
+
+export function invalidateUsersCache() {
+  globalCache.__belmonteUsersCache = undefined;
+}
+
+// ============================================================================
 // SECRETARIAS
 // ============================================================================
 
@@ -25,35 +44,51 @@ export async function listSecretarias(options?: {
   onlyActive?: boolean;
   secretariaId?: string | null;
 }): Promise<SecretariaDoc[]> {
-  const db = getDb();
+  let items: SecretariaDoc[];
 
+  if (
+    globalCache.__belmonteSecretariasCache &&
+    Date.now() < globalCache.__belmonteSecretariasCache.expiresAt
+  ) {
+    items = globalCache.__belmonteSecretariasCache.data;
+  } else {
+    const db = getDb();
+    const snap = await db.collection(COLLECTIONS.SECRETARIAS).get();
+    items = snap.docs
+      .map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<SecretariaDoc, "id">),
+      }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+
+    globalCache.__belmonteSecretariasCache = {
+      data: items,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    };
+  }
+
+  let filtered = items;
   if (options?.secretariaId) {
-    const snap = await db
-      .collection(COLLECTIONS.SECRETARIAS)
-      .doc(options.secretariaId)
-      .get();
-    if (!snap.exists) return [];
-    const doc = { id: snap.id, ...(snap.data() as Omit<SecretariaDoc, "id">) };
-    if (options.onlyActive && !doc.ativa) return [];
-    return [doc];
+    filtered = filtered.filter((s) => s.id === options.secretariaId);
   }
-
-  const snap = await db.collection(COLLECTIONS.SECRETARIAS).get();
-  let items = snap.docs.map((d) => ({
-    id: d.id,
-    ...(d.data() as Omit<SecretariaDoc, "id">),
-  }));
-
   if (options?.onlyActive) {
-    items = items.filter((s) => s.ativa);
+    filtered = filtered.filter((s) => s.ativa);
   }
-
-  return items.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  return filtered;
 }
 
 export async function getSecretariaById(
   id: string
 ): Promise<SecretariaDoc | null> {
+  if (
+    globalCache.__belmonteSecretariasCache &&
+    Date.now() < globalCache.__belmonteSecretariasCache.expiresAt
+  ) {
+    return (
+      globalCache.__belmonteSecretariasCache.data.find((s) => s.id === id) ??
+      null
+    );
+  }
   const db = getDb();
   const snap = await db.collection(COLLECTIONS.SECRETARIAS).doc(id).get();
   if (!snap.exists) return null;
@@ -96,6 +131,7 @@ export async function createSecretariaDoc(data: {
     updatedAt: ts,
   };
   await ref.set(payload);
+  invalidateSecretariasCache();
   return { id: ref.id, ...payload };
 }
 
@@ -125,6 +161,7 @@ export async function updateSecretariaDoc(
   if (patch.driveFolderId !== undefined) updates.driveFolderId = patch.driveFolderId;
 
   await ref.update(updates);
+  invalidateSecretariasCache();
   const updated = await ref.get();
   return { id: updated.id, ...(updated.data() as Omit<SecretariaDoc, "id">) };
 }
@@ -195,6 +232,8 @@ export async function deleteSecretariaCascade(params: {
     }
   }
 
+  invalidateSecretariasCache();
+  invalidateUsersCache();
   return true;
 }
 
@@ -203,17 +242,36 @@ export async function deleteSecretariaCascade(params: {
 // ============================================================================
 
 export async function listUsers(): Promise<UserDoc[]> {
+  if (
+    globalCache.__belmonteUsersCache &&
+    Date.now() < globalCache.__belmonteUsersCache.expiresAt
+  ) {
+    return globalCache.__belmonteUsersCache.data;
+  }
+
   const db = getDb();
   const snap = await db.collection(COLLECTIONS.USERS).get();
-  return snap.docs
+  const items = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() as Omit<UserDoc, "id">) }))
     .sort((a, b) => {
       if (a.role !== b.role) return a.role === "ADMIN" ? -1 : 1;
       return a.name.localeCompare(b.name, "pt-BR");
     });
+
+  globalCache.__belmonteUsersCache = {
+    data: items,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  };
+  return items;
 }
 
 export async function getUserById(id: string): Promise<UserDoc | null> {
+  if (
+    globalCache.__belmonteUsersCache &&
+    Date.now() < globalCache.__belmonteUsersCache.expiresAt
+  ) {
+    return globalCache.__belmonteUsersCache.data.find((u) => u.id === id) ?? null;
+  }
   const db = getDb();
   const snap = await db.collection(COLLECTIONS.USERS).doc(id).get();
   if (!snap.exists) return null;
@@ -226,25 +284,28 @@ export async function findUserByIdentifier(
   const db = getDb();
   const normalized = identifier.trim().toLowerCase();
 
-  const byEmail = await db
+  // Otimização: consulta direta pelo campo provável (1 único round-trip no login)
+  const primaryField = normalized.includes("@") ? "email" : "username";
+  const primarySnap = await db
     .collection(COLLECTIONS.USERS)
-    .where("email", "==", normalized)
+    .where(primaryField, "==", normalized)
     .limit(1)
     .get();
 
-  if (!byEmail.empty) {
-    const d = byEmail.docs[0];
+  if (!primarySnap.empty) {
+    const d = primarySnap.docs[0];
     return { id: d.id, ...(d.data() as Omit<UserDoc, "id">) };
   }
 
-  const byUsername = await db
+  const fallbackField = primaryField === "email" ? "username" : "email";
+  const fallbackSnap = await db
     .collection(COLLECTIONS.USERS)
-    .where("username", "==", normalized)
+    .where(fallbackField, "==", normalized)
     .limit(1)
     .get();
 
-  if (!byUsername.empty) {
-    const d = byUsername.docs[0];
+  if (!fallbackSnap.empty) {
+    const d = fallbackSnap.docs[0];
     return { id: d.id, ...(d.data() as Omit<UserDoc, "id">) };
   }
 
@@ -275,6 +336,7 @@ export async function createUserDoc(data: {
     updatedAt: ts,
   };
   await ref.set(payload);
+  invalidateUsersCache();
   return { id: ref.id, ...payload };
 }
 
@@ -307,6 +369,7 @@ export async function updateUserDoc(
   if (patch.ativo !== undefined) updates.ativo = patch.ativo;
 
   await ref.update(updates);
+  invalidateUsersCache();
   const updated = await ref.get();
   return { id: updated.id, ...(updated.data() as Omit<UserDoc, "id">) };
 }
@@ -336,6 +399,7 @@ export async function deleteUserPreservingEvents(params: {
   }
 
   await userRef.delete();
+  invalidateUsersCache();
   return true;
 }
 
@@ -441,6 +505,7 @@ export async function createEventoDoc(data: {
     updatedAt: ts,
   };
   await ref.set(payload);
+  invalidateSecretariasCache();
   return { id: ref.id, ...payload };
 }
 
@@ -542,6 +607,37 @@ export async function listMidiasByEvento(eventoId: string): Promise<MidiaDoc[]> 
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/**
+ * Busca mídias somente dos `eventoIds` necessários (em lotes paralelos de 30 via `in`),
+ * evitando baixar a coleção inteira `midias` do Firestore.
+ */
+export async function listMidiasByEventoIds(
+  eventoIds: string[]
+): Promise<MidiaDoc[]> {
+  const uniqueIds = Array.from(new Set(eventoIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return [];
+
+  const db = getDb();
+  const chunks: string[][] = [];
+  for (let i = 0; i < uniqueIds.length; i += 30) {
+    chunks.push(uniqueIds.slice(i, i + 30));
+  }
+
+  const snaps = await Promise.all(
+    chunks.map((chunk) =>
+      db.collection(COLLECTIONS.MIDIAS).where("eventoId", "in", chunk).get()
+    )
+  );
+
+  const result: MidiaDoc[] = [];
+  for (const snap of snaps) {
+    for (const d of snap.docs) {
+      result.push({ id: d.id, ...(d.data() as Omit<MidiaDoc, "id">) });
+    }
+  }
+  return result;
+}
+
 export async function listAllMidias(): Promise<MidiaDoc[]> {
   const db = getDb();
   const snap = await db.collection(COLLECTIONS.MIDIAS).get();
@@ -620,6 +716,7 @@ export async function createEventoLog(data: {
     createdAt: nowIso(),
   };
   await ref.set(payload);
+  invalidateSecretariasCache();
   return { id: ref.id, ...payload };
 }
 
@@ -697,6 +794,7 @@ export async function createLoginSlideDoc(data: {
     createdAt: nowIso(),
   };
   await ref.set(payload);
+  invalidateSecretariasCache();
   return { id: ref.id, ...payload };
 }
 

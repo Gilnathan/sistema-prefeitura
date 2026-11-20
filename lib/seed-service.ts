@@ -100,7 +100,7 @@ export async function runFirestoreSeed() {
   let adminCreated = false;
   const existingAdmin = await findUserByIdentifier(adminEmail);
   if (!existingAdmin) {
-    const adminHash = await bcrypt.hash(adminPassword, 12);
+    const adminHash = await bcrypt.hash(adminPassword, 10);
     await createUserDoc({
       name: adminName,
       email: adminEmail,
@@ -142,7 +142,7 @@ export async function runFirestoreSeed() {
     let usuarioCriado = false;
     const existingUser = await findUserByIdentifier(sec.email);
     if (!existingUser) {
-      const hash = await bcrypt.hash(sec.password, 12);
+      const hash = await bcrypt.hash(sec.password, 10);
       await createUserDoc({
         name: `Equipe Secretaria de ${sec.nome}`,
         email: sec.email,

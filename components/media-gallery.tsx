@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MidiaTipo } from "@/lib/types";
 import {
   ChevronLeft,
@@ -38,19 +38,33 @@ interface MidiaItem {
   createdAt: string;
 }
 
+export interface InitialMidiasData {
+  items: MidiaItem[];
+  counts: { todas: number; fotos: number; videos: number };
+  totalPages: number;
+}
+
 interface MediaGalleryProps {
   eventoId: string;
   refreshTrigger?: number;
+  initialData?: InitialMidiasData;
 }
 
-export function MediaGallery({ eventoId, refreshTrigger = 0 }: MediaGalleryProps) {
+export function MediaGallery({
+  eventoId,
+  refreshTrigger = 0,
+  initialData,
+}: MediaGalleryProps) {
   const [aba, setAba] = useState<"TODAS" | "FOTO" | "VIDEO">("TODAS");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [items, setItems] = useState<MidiaItem[]>([]);
-  const [counts, setCounts] = useState({ todas: 0, fotos: 0, videos: 0 });
-  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(!initialData);
+  const [items, setItems] = useState<MidiaItem[]>(initialData?.items ?? []);
+  const [counts, setCounts] = useState(
+    initialData?.counts ?? { todas: 0, fotos: 0, videos: 0 }
+  );
+  const [totalPages, setTotalPages] = useState(initialData?.totalPages ?? 1);
   const [lightboxItem, setLightboxItem] = useState<MidiaItem | null>(null);
+  const skipInitialFetch = useRef(Boolean(initialData));
 
   const fetchMidias = useCallback(async () => {
     setLoading(true);
@@ -74,6 +88,10 @@ export function MediaGallery({ eventoId, refreshTrigger = 0 }: MediaGalleryProps
   }, [eventoId, page, aba]);
 
   useEffect(() => {
+    if (skipInitialFetch.current && refreshTrigger === 0) {
+      skipInitialFetch.current = false;
+      return;
+    }
     fetchMidias();
   }, [fetchMidias, refreshTrigger]);
 

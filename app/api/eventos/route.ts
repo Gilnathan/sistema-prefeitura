@@ -4,12 +4,10 @@ import {
   createEventoDoc,
   createEventoLog,
   getSecretariaById,
-  listAllMidias,
-  listEventos,
   listSecretarias,
-  listUsers,
   updateSecretariaDoc,
 } from "@/lib/firestore-repo";
+import { queryEventosPaginados } from "@/lib/data-loaders";
 import { createEventoSchema } from "@/lib/validations";
 import {
   ensureEventoFolderHierarchy,
@@ -24,134 +22,19 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const page = Math.max(1, Number(searchParams.get("page") || "1"));
-  const pageSize = Math.min(50, Math.max(1, Number(searchParams.get("pageSize") || "10")));
-  const q = (searchParams.get("q") || "").trim().toLowerCase();
-  const statusParam = searchParams.get("status") || "";
-  const secretariaParam = searchParams.get("secretariaId") || "";
-  const mesParam = searchParams.get("mes") || "";
-  const anoParam = searchParams.get("ano") || "";
-
-  // Isolamento estrito RBAC
-  const effectiveSecId =
-    session.user.role === "SECRETARIA"
-      ? session.user.secretariaId ?? "__none__"
-      : secretariaParam && secretariaParam !== "TODAS"
-      ? secretariaParam
-      : null;
-
-  const [eventosRaw, secretarias, usuarios, todasMidias] = await Promise.all([
-    listEventos(effectiveSecId ? { secretariaId: effectiveSecId } : undefined),
-    listSecretarias(),
-    listUsers(),
-    listAllMidias(),
-  ]);
-
-  let filtrados = eventosRaw;
-
-  if (q) {
-    filtrados = filtrados.filter(
-      (ev) =>
-        ev.titulo.toLowerCase().includes(q) ||
-        ev.local.toLowerCase().includes(q) ||
-        ev.resumo.toLowerCase().includes(q)
-    );
-  }
-
-  if (
-    statusParam &&
-    ["NOVO", "EM_PRODUCAO", "PUBLICADO"].includes(statusParam)
-  ) {
-    filtrados = filtrados.filter((ev) => ev.status === statusParam);
-  }
-
-  if (anoParam && /^\d{4}$/.test(anoParam)) {
-    const ano = Number(anoParam);
-    const mes = mesParam && /^\d{1,2}$/.test(mesParam) ? Number(mesParam) : null;
-    filtrados = filtrados.filter((ev) => {
-      const d = new Date(ev.dataRealizacao);
-      if (d.getUTCFullYear() !== ano) return false;
-      if (mes && mes >= 1 && mes <= 12 && d.getUTCMonth() + 1 !== mes) {
-        return false;
-      }
-      return true;
-    });
-  }
-
-  const total = filtrados.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const slice = filtrados.slice((page - 1) * pageSize, page * pageSize);
-
-  const secMap = new Map(secretarias.map((s) => [s.id, s]));
-  const userMap = new Map(usuarios.map((u) => [u.id, u]));
-
-  const midiasByEvento = new Map<string, { total: number; fotos: number; videos: number }>();
-  for (const m of todasMidias) {
-    const curr = midiasByEvento.get(m.eventoId) ?? { total: 0, fotos: 0, videos: 0 };
-    curr.total += 1;
-    if (m.tipo === "FOTO") curr.fotos += 1;
-    if (m.tipo === "VIDEO") curr.videos += 1;
-    midiasByEvento.set(m.eventoId, curr);
-  }
-
-  const items = slice.map((ev) => {
-    const sec = secMap.get(ev.secretariaId);
-    const autor = userMap.get(ev.criadoPorId);
-    const counts = midiasByEvento.get(ev.id) ?? { total: 0, fotos: 0, videos: 0 };
-    const secretariasParceiras = (ev.secretariasParceirasIds || [])
-      .map((sid) => secMap.get(sid))
-      .filter((s): s is NonNullable<typeof s> => Boolean(s))
-      .map((s) => ({ id: s.id, nome: s.nome, sigla: s.sigla }));
-
-    const isParceira = Boolean(
-      effectiveSecId &&
-        ev.secretariaId !== effectiveSecId &&
-        ev.secretariasParceirasIds?.includes(effectiveSecId)
-    );
-
-    return {
-      id: ev.id,
-      titulo: ev.titulo,
-      dataRealizacao: ev.dataRealizacao,
-      local: ev.local,
-      resumo: ev.resumo,
-      status: ev.status,
-      createdAt: ev.createdAt,
-      secretaria: sec
-        ? { id: sec.id, nome: sec.nome, sigla: sec.sigla }
-        : { id: ev.secretariaId, nome: "Secretaria", sigla: null },
-      secretariasParceiras,
-      orgaosParceirosExternos: ev.orgaosParceirosExternos || [],
-      isParceira,
-      criadoPor: autor
-        ? { id: autor.id, name: autor.name, email: autor.email }
-        : {
-            id: ev.criadoPorId,
-            name: ev.criadoPorNome || "Usuário",
-            email: ev.criadoPorEmail || "",
-          },
-      editadoPor: ev.editadoPorEmail
-        ? {
-            name: ev.editadoPorNome || "",
-            email: ev.editadoPorEmail,
-            em: ev.editadoEm || ev.updatedAt,
-          }
-        : null,
-      totalMidias: counts.total,
-      totalFotos: counts.fotos,
-      totalVideos: counts.videos,
-    };
+  const result = await queryEventosPaginados({
+    role: session.user.role,
+    userSecretariaId: session.user.secretariaId,
+    page: Number(searchParams.get("page") || "1"),
+    pageSize: Number(searchParams.get("pageSize") || "10"),
+    q: searchParams.get("q") || "",
+    status: searchParams.get("status") || "",
+    secretariaId: searchParams.get("secretariaId") || "",
+    mes: searchParams.get("mes") || "",
+    ano: searchParams.get("ano") || "",
   });
 
-  return NextResponse.json({
-    items,
-    pagination: {
-      page,
-      pageSize,
-      total,
-      totalPages,
-    },
-  });
+  return NextResponse.json(result);
 }
 
 export async function POST(req: Request) {

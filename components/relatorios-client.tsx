@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { EventoStatus } from "@/lib/types";
 import { toast } from "sonner";
@@ -70,21 +70,28 @@ export function RelatoriosClient({
   secretarias,
   userSecretariaId,
   userSecretariaNome,
+  initialMes,
+  initialAno,
+  initialData,
 }: {
   isAdmin: boolean;
   secretarias: SecretariaOption[];
   userSecretariaId: string | null;
   userSecretariaNome: string | null;
+  initialMes?: number;
+  initialAno?: number;
+  initialData?: RelatorioResponse;
 }) {
   const now = new Date();
-  const [mes, setMes] = useState(now.getMonth() + 1);
-  const [ano, setAno] = useState(now.getFullYear());
+  const [mes, setMes] = useState(initialMes ?? now.getMonth() + 1);
+  const [ano, setAno] = useState(initialAno ?? now.getFullYear());
   const [secretariaId, setSecretariaId] = useState(
     isAdmin ? "TODAS" : userSecretariaId ?? ""
   );
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialData);
   const [exportingPdf, setExportingPdf] = useState(false);
-  const [data, setData] = useState<RelatorioResponse | null>(null);
+  const [data, setData] = useState<RelatorioResponse | null>(initialData ?? null);
+  const skipInitialFetch = useRef(Boolean(initialData));
 
   const years = [
     now.getFullYear() + 1,
@@ -115,6 +122,10 @@ export function RelatoriosClient({
   }, [mes, ano, secretariaId]);
 
   useEffect(() => {
+    if (skipInitialFetch.current) {
+      skipInitialFetch.current = false;
+      return;
+    }
     loadReport();
   }, [loadReport]);
 

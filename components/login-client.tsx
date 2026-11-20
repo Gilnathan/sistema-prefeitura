@@ -54,8 +54,7 @@ export function LoginClient({ slides }: { slides: LoginSlideItem[] }) {
       }
 
       toast.success("Bem-vindo ao Portal da Prefeitura de Belmonte!");
-      router.push("/dashboard");
-      router.refresh();
+      router.replace("/dashboard");
     } catch {
       toast.error("Erro inesperado ao autenticar.");
     } finally {

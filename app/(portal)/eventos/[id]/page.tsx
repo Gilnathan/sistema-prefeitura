@@ -5,6 +5,7 @@ import {
   getEventoById,
   getSecretariaById,
   getUserById,
+  listMidiasByEvento,
   listSecretarias,
 } from "@/lib/firestore-repo";
 import { EventoDetailClient } from "@/components/evento-detail-client";
@@ -29,11 +30,22 @@ export default async function EventoDetailPage({
     redirect("/dashboard");
   }
 
-  const [secretaria, criadoPor, todasSecretarias] = await Promise.all([
+  const [secretaria, criadoPor, todasSecretarias, todasMidias] = await Promise.all([
     getSecretariaById(evento.secretariaId),
     getUserById(evento.criadoPorId),
     listSecretarias({ onlyActive: true }),
+    listMidiasByEvento(evento.id),
   ]);
+
+  const initialMidias = {
+    items: todasMidias.slice(0, 12),
+    counts: {
+      todas: todasMidias.length,
+      fotos: todasMidias.filter((m) => m.tipo === "FOTO").length,
+      videos: todasMidias.filter((m) => m.tipo === "VIDEO").length,
+    },
+    totalPages: Math.max(1, Math.ceil(todasMidias.length / 12)),
+  };
 
   const secMap = new Map(todasSecretarias.map((s) => [s.id, s]));
   const secretariasParceiras = (evento.secretariasParceirasIds || [])
@@ -53,6 +65,7 @@ export default async function EventoDetailPage({
       isAdmin={session.user.role === "ADMIN"}
       isParceira={isParceira}
       todasSecretarias={todasSecretarias.map((s) => ({ id: s.id, nome: s.nome }))}
+      initialMidias={initialMidias}
       evento={{
         id: evento.id,
         titulo: evento.titulo,

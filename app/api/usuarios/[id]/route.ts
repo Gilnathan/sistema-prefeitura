@@ -46,7 +46,7 @@ export async function PATCH(
   }
   if (parsed.data.ativo !== undefined) patch.ativo = parsed.data.ativo;
   if (parsed.data.password && parsed.data.password.length >= 6) {
-    patch.passwordHash = await bcrypt.hash(parsed.data.password, 12);
+    patch.passwordHash = await bcrypt.hash(parsed.data.password, 10);
   }
 
   const updated = await updateUserDoc(params.id, patch);

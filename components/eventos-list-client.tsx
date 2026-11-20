@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { EventoStatus } from "@/lib/types";
 import { toast } from "sonner";
@@ -56,16 +56,20 @@ interface EventoListItem {
   totalVideos: number;
 }
 
+import type { EventosPaginadosDTO } from "@/lib/data-loaders";
+
 interface EventosListClientProps {
   isAdmin: boolean;
   secretariaNome: string | null;
   secretarias: SecretariaOption[];
+  initialData?: EventosPaginadosDTO;
 }
 
 export function EventosListClient({
   isAdmin,
   secretariaNome,
   secretarias,
+  initialData,
 }: EventosListClientProps) {
   const currentYear = new Date().getFullYear();
   const years = [currentYear + 1, currentYear, currentYear - 1, currentYear - 2];
@@ -78,10 +82,13 @@ export function EventosListClient({
   const [ano, setAno] = useState("");
   const [page, setPage] = useState(1);
 
-  const [loading, setLoading] = useState(true);
-  const [items, setItems] = useState<EventoListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(!initialData);
+  const [items, setItems] = useState<EventoListItem[]>(initialData?.items ?? []);
+  const [total, setTotal] = useState(initialData?.pagination.total ?? 0);
+  const [totalPages, setTotalPages] = useState(
+    initialData?.pagination.totalPages ?? 1
+  );
+  const skipInitialFetch = useRef(Boolean(initialData));
   const [deleteTarget, setDeleteTarget] = useState<EventoListItem | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -142,6 +149,10 @@ export function EventosListClient({
   }, [page, debouncedQ, status, isAdmin, secretariaId, ano, mes]);
 
   useEffect(() => {
+    if (skipInitialFetch.current) {
+      skipInitialFetch.current = false;
+      return;
+    }
     loadEventos();
   }, [loadEventos]);
 
