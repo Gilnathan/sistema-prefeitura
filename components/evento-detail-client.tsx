@@ -1,15 +1,17 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { EventoLogDoc, EventoStatus } from "@/lib/types";
+import type { EventoLogDoc, EventoStatus, EventoTipo } from "@/lib/types";
 import { toast } from "sonner";
 import {
   ArrowLeft,
   Building2,
   Calendar,
+  CalendarClock,
   Check,
+  CheckCircle2,
   Clock,
   Copy,
   FileText,
@@ -45,11 +47,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { StatusBadge } from "@/components/status-badge";
 import { MediaGallery, type InitialMidiasData } from "@/components/media-gallery";
 import { ResumableUploader } from "@/components/resumable-uploader";
-import { atualizarStatusEventoAction } from "@/app/actions/eventos";
-import { formatarDataBR, formatarDataHoraBR, formatarDataISO } from "@/lib/utils";
+import {
+  formatarDataBR,
+  formatarDataHoraBR,
+  formatarDataISO,
+  normalizarStatusEvento,
+} from "@/lib/utils";
 
 interface EventoDetailClientProps {
   isAdmin: boolean;
@@ -59,6 +64,7 @@ interface EventoDetailClientProps {
   evento: {
     id: string;
     titulo: string;
+    tipo: EventoTipo;
     dataRealizacao: string;
     local: string;
     resumo: string;
@@ -104,10 +110,11 @@ export function EventoDetailClient({
 }: EventoDetailClientProps) {
   const router = useRouter();
   const [evento, setEvento] = useState(initialEvento);
-  const [status, setStatus] = useState<EventoStatus>(initialEvento.status);
+  const [status, setStatus] = useState<EventoStatus>(
+    normalizarStatusEvento(initialEvento.status)
+  );
   const [copied, setCopied] = useState(false);
   const [galleryRefresh, setGalleryRefresh] = useState(0);
-  const [isPending, startTransition] = useTransition();
 
   // Modal de Exclusão (somente ADMIN)
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -149,6 +156,9 @@ export function EventoDetailClient({
     initialEvento.orgaosParceirosExternos
   );
   const [novoOrgaoEdit, setNovoOrgaoEdit] = useState("");
+  const [editCancelada, setEditCancelada] = useState(
+    normalizarStatusEvento(initialEvento.status) === "CANCELADA"
+  );
 
   // Modal discreto de Registros (Auditoria)
   const [logsOpen, setLogsOpen] = useState(false);
@@ -170,6 +180,7 @@ export function EventoDetailClient({
     setEditParceirasIds(evento.secretariasParceiras.map((p) => p.id));
     setEditOrgaosExternos(evento.orgaosParceirosExternos);
     setNovoOrgaoEdit("");
+    setEditCancelada(status === "CANCELADA");
     setEditOpen(true);
   }
 
@@ -203,6 +214,7 @@ export function EventoDetailClient({
           relatorioCompleto: editRelatorio.trim(),
           secretariasParceirasIds: editParceirasIds,
           orgaosParceirosExternos: editOrgaosExternos,
+          cancelada: editCancelada,
         }),
       });
       const data = await res.json();
@@ -212,6 +224,10 @@ export function EventoDetailClient({
         .map((id) => todasSecretarias.find((s) => s.id === id))
         .filter((s): s is { id: string; nome: string } => Boolean(s))
         .map((s) => ({ id: s.id, nome: s.nome, sigla: null }));
+
+      if (data.evento.status) {
+        setStatus(normalizarStatusEvento(data.evento.status));
+      }
 
       setEvento((prev) => ({
         ...prev,
@@ -255,19 +271,6 @@ export function EventoDetailClient({
     } finally {
       setLoadingLogs(false);
     }
-  }
-
-  function handleStatusChange(novoStatus: EventoStatus) {
-    if (novoStatus === status) return;
-    startTransition(async () => {
-      const res = await atualizarStatusEventoAction(evento.id, novoStatus);
-      if (res?.error) {
-        toast.error(res.error);
-        return;
-      }
-      setStatus(novoStatus);
-      toast.success("Status da ação atualizado!");
-    });
   }
 
   async function handleCopyRelatorio() {
@@ -318,7 +321,22 @@ export function EventoDetailClient({
           </Link>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            <StatusBadge status={status} />
+            {status === "CANCELADA" ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-red-50 text-red-700 border border-red-200 px-2.5 py-0.5 text-xs font-semibold">
+                <X className="h-3.5 w-3.5" />
+                Cancelada
+              </span>
+            ) : evento.tipo === "FUTURA" ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 text-sky-800 border border-sky-300 px-2.5 py-0.5 text-xs font-semibold">
+                <CalendarClock className="h-3.5 w-3.5" />
+                Ação Futura
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 text-xs font-semibold">
+                <CheckCircle2 className="h-3.5 w-3.5 text-[#128C23]" />
+                Ação Realizada
+              </span>
+            )}
             <span className="inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground">
               <Building2 className="h-3.5 w-3.5" />
               {evento.secretaria.nome}
@@ -373,62 +391,24 @@ export function EventoDetailClient({
           )}
         </div>
 
-        {/* Ações e Controle de Fluxo */}
-        <div className="flex flex-col gap-2.5 lg:w-72 shrink-0">
+        {/* Ações (Editar / Excluir) */}
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="outline" size="sm" onClick={openEditModal}>
+            <Pencil className="h-3.5 w-3.5" />
+            Editar Ação
+          </Button>
           {isAdmin && (
-            <Card>
-              <CardContent className="p-4 space-y-2">
-                <label
-                  htmlFor="status-select"
-                  className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-                >
-                  Status da Publicação (Agência)
-                </label>
-                <div className="flex items-center gap-2">
-                  <select
-                    id="status-select"
-                    disabled={isPending}
-                    value={status}
-                    onChange={(e) =>
-                      handleStatusChange(e.target.value as EventoStatus)
-                    }
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <option value="NOVO">Novo</option>
-                    <option value="EM_PRODUCAO">Em Produção</option>
-                    <option value="PUBLICADO">Publicado</option>
-                  </select>
-                  {isPending && (
-                    <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
-              className="flex-1"
-              onClick={openEditModal}
+              className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
+              onClick={() => setDeleteOpen(true)}
+              title="Excluir ação"
             >
-              <Pencil className="h-3.5 w-3.5" />
-              Editar Ação
+              <Trash2 className="h-3.5 w-3.5" />
+              Excluir
             </Button>
-            {isAdmin && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                onClick={() => setDeleteOpen(true)}
-                title="Excluir ação"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Excluir
-              </Button>
-            )}
-          </div>
+          )}
         </div>
       </div>
 
@@ -707,6 +687,24 @@ export function EventoDetailClient({
                 </div>
               )}
             </div>
+
+            {/* Opção para marcar ou desmarcar a ação como Cancelada */}
+            <label className="flex items-start gap-2.5 rounded-lg border border-red-200 bg-red-50/50 p-3 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 rounded accent-red-600"
+                checked={editCancelada}
+                onChange={(e) => setEditCancelada(e.target.checked)}
+              />
+              <div className="space-y-0.5">
+                <span className="text-sm font-medium text-red-900">
+                  Marcar ação como Cancelada
+                </span>
+                <p className="text-xs text-red-700/80">
+                  Ações canceladas não entram no ranking mensal de secretarias.
+                </p>
+              </div>
+            </label>
 
             <div className="flex justify-end gap-2 pt-2">
               <Button

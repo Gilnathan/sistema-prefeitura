@@ -29,6 +29,7 @@ export async function GET(req: Request) {
     pageSize: Number(searchParams.get("pageSize") || "10"),
     q: searchParams.get("q") || "",
     status: searchParams.get("status") || "",
+    tipo: searchParams.get("tipo") || "",
     secretariaId: searchParams.get("secretariaId") || "",
     mes: searchParams.get("mes") || "",
     ano: searchParams.get("ano") || "",
@@ -54,10 +55,11 @@ export async function POST(req: Request) {
 
   const {
     titulo,
+    tipo = "REALIZADA",
     dataRealizacao,
     local,
     resumo,
-    relatorioCompleto,
+    relatorioCompleto = "",
     secretariasParceirasIds = [],
     orgaosParceirosExternos = [],
   } = parsed.data;
@@ -127,11 +129,12 @@ export async function POST(req: Request) {
 
   const evento = await createEventoDoc({
     titulo,
+    tipo,
     dataRealizacao: dataObj.toISOString(),
     local,
     resumo,
     relatorioCompleto,
-    status: "NOVO",
+    status: "EM_PRODUCAO",
     driveFolderId: eventoDriveFolderId,
     secretariaId: secretaria.id,
     secretariasParceirasIds: cleanParceirasIds,
@@ -141,6 +144,7 @@ export async function POST(req: Request) {
     criadoPorEmail: session.user.email,
   });
 
+  const tipoLabel = tipo === "FUTURA" ? "Ação Futura (agendada)" : "Ação Realizada";
   const parceirosInfo: string[] = [];
   if (cleanParceirasIds.length > 0) {
     const todasSecs = await listSecretarias();
@@ -159,7 +163,7 @@ export async function POST(req: Request) {
     eventoId: evento.id,
     acao: "CRIACAO",
     descricao:
-      `Ação "${evento.titulo}" registrada para a secretaria ${secretaria.nome}.` +
+      `${tipoLabel} "${evento.titulo}" registrada para a secretaria ${secretaria.nome}.` +
       (parceirosInfo.length > 0 ? ` (${parceirosInfo.join(" | ")})` : ""),
     usuarioId: session.user.id,
     usuarioNome: session.user.name,

@@ -1,6 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { EventoStatus, MidiaTipo } from "@/lib/types";
+import type { EventoStatus, EventoTipo, MidiaTipo } from "@/lib/types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -41,6 +41,34 @@ export function formatarDataBR(date: Date | string): string {
   const mes = String(d.getUTCMonth() + 1).padStart(2, "0");
   const ano = d.getUTCFullYear();
   return `${dia}/${mes}/${ano}`;
+}
+
+export function getHojeBahiaISO(): string {
+  // Retorna YYYY-MM-DD no fuso de Belmonte/Bahia (America/Bahia)
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bahia",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const y = parts.find((p) => p.type === "year")?.value || "2026";
+  const m = parts.find((p) => p.type === "month")?.value || "01";
+  const d = parts.find((p) => p.type === "day")?.value || "01";
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Regra automática: se a ação foi criada como FUTURA mas a data já passou
+ * (menor que hoje no fuso America/Bahia), ela passa automaticamente para REALIZADA.
+ */
+export function resolverTipoEventoEfetivo(
+  tipo: EventoTipo | undefined,
+  dataRealizacao: Date | string
+): EventoTipo {
+  if (tipo !== "FUTURA") return "REALIZADA";
+  const dataEventoISO = formatarDataISO(dataRealizacao);
+  const hojeISO = getHojeBahiaISO();
+  return dataEventoISO < hojeISO ? "REALIZADA" : "FUTURA";
 }
 
 export function formatarDataHoraBR(date: Date | string): string {
@@ -117,23 +145,36 @@ export function getDriveDownloadUrl(driveFileId: string): string {
   return `https://drive.google.com/uc?export=download&id=${driveFileId}`;
 }
 
+export function normalizarStatusEvento(
+  status: EventoStatus | undefined
+): Exclude<EventoStatus, "NOVO"> {
+  if (status === "PUBLICADO" || status === "CANCELADA") return status;
+  return "EM_PRODUCAO";
+}
+
 export const STATUS_CONFIG: Record<
   EventoStatus,
   { label: string; badgeClass: string; dotClass: string }
 > = {
+  // Legado "NOVO" é exibido como "Em Produção"
   NOVO: {
-    label: "Novo",
-    badgeClass: "bg-amber-100 text-amber-800 border-amber-200",
-    dotClass: "bg-amber-500",
+    label: "Em Produção",
+    badgeClass: "bg-blue-50 text-blue-800 border-blue-200",
+    dotClass: "bg-blue-500",
   },
   EM_PRODUCAO: {
     label: "Em Produção",
-    badgeClass: "bg-blue-100 text-blue-800 border-blue-200",
+    badgeClass: "bg-blue-50 text-blue-800 border-blue-200",
     dotClass: "bg-blue-500",
   },
   PUBLICADO: {
     label: "Publicado",
-    badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-200",
+    badgeClass: "bg-emerald-50 text-emerald-800 border-emerald-200",
     dotClass: "bg-emerald-500",
+  },
+  CANCELADA: {
+    label: "Cancelada",
+    badgeClass: "bg-red-50 text-red-700 border-red-200",
+    dotClass: "bg-red-500",
   },
 };

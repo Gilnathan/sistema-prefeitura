@@ -4,11 +4,16 @@ import {
   listSecretarias,
   listUsers,
 } from "@/lib/firestore-repo";
-import type { EventoStatus, Role } from "@/lib/types";
+import type { EventoStatus, EventoTipo, Role } from "@/lib/types";
+import {
+  normalizarStatusEvento,
+  resolverTipoEventoEfetivo,
+} from "@/lib/utils";
 
 export interface EventoListItemDTO {
   id: string;
   titulo: string;
+  tipo: EventoTipo;
   dataRealizacao: string;
   local: string;
   resumo: string;
@@ -42,6 +47,7 @@ export async function queryEventosPaginados(params: {
   pageSize?: number;
   q?: string;
   status?: string;
+  tipo?: string;
   secretariaId?: string;
   mes?: string;
   ano?: string;
@@ -50,6 +56,7 @@ export async function queryEventosPaginados(params: {
   const pageSize = Math.min(50, Math.max(1, params.pageSize ?? 10));
   const q = (params.q || "").trim().toLowerCase();
   const statusParam = params.status || "";
+  const tipoParam = params.tipo || "";
   const secretariaParam = params.secretariaId || "";
   const mesParam = params.mes || "";
   const anoParam = params.ano || "";
@@ -81,9 +88,23 @@ export async function queryEventosPaginados(params: {
 
   if (
     statusParam &&
-    ["NOVO", "EM_PRODUCAO", "PUBLICADO"].includes(statusParam)
+    ["EM_PRODUCAO", "PUBLICADO", "CANCELADA"].includes(statusParam)
   ) {
-    filtrados = filtrados.filter((ev) => ev.status === statusParam);
+    filtrados = filtrados.filter(
+      (ev) => normalizarStatusEvento(ev.status) === statusParam
+    );
+  }
+
+  if (tipoParam === "CANCELADA") {
+    filtrados = filtrados.filter(
+      (ev) => normalizarStatusEvento(ev.status) === "CANCELADA"
+    );
+  } else if (tipoParam === "REALIZADA" || tipoParam === "FUTURA") {
+    filtrados = filtrados.filter(
+      (ev) =>
+        normalizarStatusEvento(ev.status) !== "CANCELADA" &&
+        resolverTipoEventoEfetivo(ev.tipo, ev.dataRealizacao) === tipoParam
+    );
   }
 
   if (anoParam && /^\d{4}$/.test(anoParam)) {
@@ -144,13 +165,16 @@ export async function queryEventosPaginados(params: {
         ev.secretariasParceirasIds?.includes(effectiveSecId)
     );
 
+    const tipoEfetivo = resolverTipoEventoEfetivo(ev.tipo, ev.dataRealizacao);
+
     return {
       id: ev.id,
       titulo: ev.titulo,
+      tipo: tipoEfetivo,
       dataRealizacao: ev.dataRealizacao,
       local: ev.local,
       resumo: ev.resumo,
-      status: ev.status,
+      status: normalizarStatusEvento(ev.status),
       createdAt: ev.createdAt,
       secretaria: sec
         ? { id: sec.id, nome: sec.nome, sigla: sec.sigla }
@@ -188,32 +212,31 @@ export interface RelatorioMensalDTO {
   periodo: { mes: number; ano: number; secretariaId: string };
   kpis: {
     totalEventos: number;
-    totalFotos: number;
-    totalVideos: number;
-    totalMidias: number;
-    totalBytes: number;
-    porStatus: Record<EventoStatus, number>;
+    totalRealizadas: number;
+    totalFuturas: number;
+    totalCanceladas: number;
+    porStatus: {
+      EM_PRODUCAO: number;
+      PUBLICADO: number;
+      CANCELADA: number;
+    };
   };
   rankingSecretarias: {
     secretariaId: string;
     nome: string;
     sigla: string | null;
-    eventos: number;
-    fotos: number;
-    videos: number;
+    eventosRealizados: number;
   }[];
   eventos: {
     id: string;
     titulo: string;
+    tipo: EventoTipo;
     dataRealizacao: string;
     local: string;
     resumo: string;
-    status: EventoStatus;
+    status: Exclude<EventoStatus, "NOVO">;
     secretaria: { id: string; nome: string; sigla: string | null };
     criadoPor: string;
-    fotos: number;
-    videos: number;
-    totalMidias: number;
   }[];
 }
 
@@ -242,35 +265,8 @@ export async function buildRelatorioMensal(params: {
     })
     .sort((a, b) => a.dataRealizacao.localeCompare(b.dataRealizacao));
 
-  // Busca mídias APENAS dos eventos do mês filtrado (muito mais rápido!)
-  const midiasPeriodo = await listMidiasByEventoIds(
-    eventosPeriodo.map((e) => e.id)
-  );
-
   const secMap = new Map(secretarias.map((s) => [s.id, s]));
   const userMap = new Map(usuarios.map((u) => [u.id, u]));
-
-  const midiasByEvento = new Map<
-    string,
-    { fotos: number; videos: number; total: number; bytes: number }
-  >();
-  for (const m of midiasPeriodo) {
-    const curr = midiasByEvento.get(m.eventoId) ?? {
-      fotos: 0,
-      videos: 0,
-      total: 0,
-      bytes: 0,
-    };
-    curr.total += 1;
-    curr.bytes += Number(m.fileSize || 0);
-    if (m.tipo === "FOTO") curr.fotos += 1;
-    if (m.tipo === "VIDEO") curr.videos += 1;
-    midiasByEvento.set(m.eventoId, curr);
-  }
-
-  let totalFotos = 0;
-  let totalVideos = 0;
-  let totalBytes = 0;
 
   const rankingMap = new Map<
     string,
@@ -278,77 +274,75 @@ export async function buildRelatorioMensal(params: {
       secretariaId: string;
       nome: string;
       sigla: string | null;
-      eventos: number;
-      fotos: number;
-      videos: number;
+      eventosRealizados: number;
     }
   >();
 
-  const porStatus: Record<EventoStatus, number> = {
-    NOVO: 0,
+  const porStatus = {
     EM_PRODUCAO: 0,
     PUBLICADO: 0,
+    CANCELADA: 0,
   };
 
+  let totalRealizadas = 0;
+  let totalFuturas = 0;
+  let totalCanceladas = 0;
+
   const eventosDetalhados = eventosPeriodo.map((ev) => {
-    const mStats = midiasByEvento.get(ev.id) ?? {
-      fotos: 0,
-      videos: 0,
-      total: 0,
-      bytes: 0,
-    };
     const sec = secMap.get(ev.secretariaId) ?? {
       id: ev.secretariaId,
       nome: "Secretaria",
       sigla: null,
     };
     const autor = userMap.get(ev.criadoPorId);
+    const tipoEfetivo = resolverTipoEventoEfetivo(ev.tipo, ev.dataRealizacao);
+    const statusNorm = normalizarStatusEvento(ev.status);
 
-    totalFotos += mStats.fotos;
-    totalVideos += mStats.videos;
-    totalBytes += mStats.bytes;
-    porStatus[ev.status] += 1;
+    porStatus[statusNorm] += 1;
 
-    const current = rankingMap.get(sec.id) ?? {
-      secretariaId: sec.id,
-      nome: sec.nome,
-      sigla: sec.sigla,
-      eventos: 0,
-      fotos: 0,
-      videos: 0,
-    };
-    current.eventos += 1;
-    current.fotos += mStats.fotos;
-    current.videos += mStats.videos;
-    rankingMap.set(sec.id, current);
+    if (statusNorm === "CANCELADA") {
+      totalCanceladas += 1;
+    } else if (tipoEfetivo === "FUTURA") {
+      totalFuturas += 1;
+    } else {
+      totalRealizadas += 1;
+      // Ranking considera APENAS ações já realizadas (não futuras e não canceladas)
+      const current = rankingMap.get(sec.id) ?? {
+        secretariaId: sec.id,
+        nome: sec.nome,
+        sigla: sec.sigla,
+        eventosRealizados: 0,
+      };
+      current.eventosRealizados += 1;
+      rankingMap.set(sec.id, current);
+    }
 
     return {
       id: ev.id,
       titulo: ev.titulo,
+      tipo: tipoEfetivo,
       dataRealizacao: ev.dataRealizacao,
       local: ev.local,
       resumo: ev.resumo,
-      status: ev.status,
+      status: statusNorm,
       secretaria: { id: sec.id, nome: sec.nome, sigla: sec.sigla },
       criadoPor: autor?.name || ev.criadoPorNome || "Usuário",
-      fotos: mStats.fotos,
-      videos: mStats.videos,
-      totalMidias: mStats.total,
     };
   });
 
   const rankingSecretarias = Array.from(rankingMap.values()).sort(
-    (a, b) => b.eventos - a.eventos || b.fotos + b.videos - (a.fotos + a.videos)
+    (a, b) =>
+      b.eventosRealizados - a.eventosRealizados ||
+      a.nome.localeCompare(b.nome, "pt-BR")
   );
 
   return {
     periodo: { mes: params.mes, ano: params.ano, secretariaId },
     kpis: {
       totalEventos: eventosPeriodo.length,
-      totalFotos,
-      totalVideos,
-      totalMidias: totalFotos + totalVideos,
-      totalBytes,
+      totalRealizadas,
+      totalFuturas,
+      totalCanceladas,
       porStatus,
     },
     rankingSecretarias,

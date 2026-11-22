@@ -7,6 +7,8 @@ import { toast } from "sonner";
 import {
   ArrowLeft,
   Calendar,
+  CalendarClock,
+  CheckCircle2,
   ChevronDown,
   FileText,
   Handshake,
@@ -17,6 +19,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import type { EventoTipo } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -63,6 +66,7 @@ export function NovoEventoForm({
   const router = useRouter();
   const hojeISO = new Date().toISOString().slice(0, 10);
 
+  const [tipo, setTipo] = useState<EventoTipo>("REALIZADA");
   const [titulo, setTitulo] = useState("");
   const [dataRealizacao, setDataRealizacao] = useState(hojeISO);
   const [local, setLocal] = useState("");
@@ -111,9 +115,9 @@ export function NovoEventoForm({
       return;
     }
 
-    if (relatorioCompleto.trim().length < 10) {
+    if (tipo === "REALIZADA" && relatorioCompleto.trim().length < 10) {
       toast.error(
-        "Preencha a aba 'Relatório Completo' com os detalhes do evento."
+        "Preencha a aba 'Relatório Completo' com os detalhes da ação realizada."
       );
       setActiveTab("relatorio");
       return;
@@ -133,6 +137,7 @@ export function NovoEventoForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           titulo: titulo.trim(),
+          tipo,
           dataRealizacao,
           local: local.trim(),
           resumo: resumo.trim(),
@@ -266,6 +271,65 @@ export function NovoEventoForm({
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Seletor no topo: Ação Já Realizada vs Ação Futura / Agendada */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => setTipo("REALIZADA")}
+            className={`flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all ${
+              tipo === "REALIZADA"
+                ? "border-[#128C23] bg-emerald-50/70 shadow-sm"
+                : "border-border bg-card hover:border-emerald-300"
+            }`}
+          >
+            <div
+              className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                tipo === "REALIZADA"
+                  ? "bg-[#128C23] text-white"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              <CheckCircle2 className="h-5 w-5" />
+            </div>
+            <div className="space-y-0.5">
+              <p className="text-sm font-semibold text-foreground">
+                Ação Já Realizada
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Registre uma ação que já aconteceu, com relatório completo e fotos/vídeos.
+              </p>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTipo("FUTURA")}
+            className={`flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all ${
+              tipo === "FUTURA"
+                ? "border-sky-500 bg-sky-50/80 shadow-sm"
+                : "border-border bg-card hover:border-sky-300"
+            }`}
+          >
+            <div
+              className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                tipo === "FUTURA"
+                  ? "bg-sky-600 text-white"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              <CalendarClock className="h-5 w-5" />
+            </div>
+            <div className="space-y-0.5">
+              <p className="text-sm font-semibold text-foreground">
+                Ação Futura (Ainda vai acontecer)
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Agende uma ação futura com destaque visual azul. Ao passar da data, muda automaticamente para realizada.
+              </p>
+            </div>
+          </button>
+        </div>
+
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-3 h-auto p-1">
             <TabsTrigger value="dados" className="gap-1.5 py-2 text-xs sm:text-sm px-1.5 sm:px-3">
@@ -328,7 +392,9 @@ export function NovoEventoForm({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="dataRealizacao">Data de Realização *</Label>
+                    <Label htmlFor="dataRealizacao">
+                      {tipo === "FUTURA" ? "Data Prevista *" : "Data de Realização *"}
+                    </Label>
                     <Input
                       id="dataRealizacao"
                       type="date"
@@ -519,16 +585,22 @@ export function NovoEventoForm({
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="relatorioCompleto">
-                    Texto Detalhado do Relatório *
+                    {tipo === "FUTURA"
+                      ? "Detalhes / Planejamento da Ação (opcional)"
+                      : "Texto Detalhado do Relatório *"}
                   </Label>
                   <Textarea
                     id="relatorioCompleto"
                     rows={12}
-                    placeholder="Descreva os objetivos da ação, quantidade de pessoas atendidas, autoridades participantes, resultados alcançados..."
+                    placeholder={
+                      tipo === "FUTURA"
+                        ? "Opcional: informe programação prevista, público esperado, necessidades de cobertura ou divulgação..."
+                        : "Descreva os objetivos da ação, quantidade de pessoas atendidas, autoridades participantes, resultados alcançados..."
+                    }
                     value={relatorioCompleto}
                     onChange={(e) => setRelatorioCompleto(e.target.value)}
                     className="leading-relaxed"
-                    required
+                    required={tipo === "REALIZADA"}
                   />
                 </div>
 

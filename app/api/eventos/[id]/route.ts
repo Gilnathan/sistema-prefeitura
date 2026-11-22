@@ -13,7 +13,11 @@ import {
 } from "@/lib/firestore-repo";
 import { updateEventoSchema } from "@/lib/validations";
 import type { EventoLogChange } from "@/lib/types";
-import { STATUS_CONFIG, formatarDataBR } from "@/lib/utils";
+import {
+  STATUS_CONFIG,
+  formatarDataBR,
+  normalizarStatusEvento,
+} from "@/lib/utils";
 
 export async function GET(
   _req: Request,
@@ -104,9 +108,14 @@ export async function PATCH(
     );
   }
 
-  if (parsed.data.status !== undefined && session.user.role !== "ADMIN") {
+  // SECRETARIA pode marcar/desmarcar como cancelada na edição; apenas ADMIN altera para PUBLICADO
+  if (
+    parsed.data.status !== undefined &&
+    parsed.data.status !== "CANCELADA" &&
+    session.user.role !== "ADMIN"
+  ) {
     return NextResponse.json(
-      { error: "Apenas a agência (ADMIN) pode alterar o status da ação." },
+      { error: "Apenas a agência (ADMIN) pode alterar o status de publicação da ação." },
       { status: 403 }
     );
   }
@@ -172,12 +181,22 @@ export async function PATCH(
     }
   }
 
-  if (parsed.data.status !== undefined && parsed.data.status !== existing.status) {
-    patch.status = parsed.data.status;
+  const statusAtual = normalizarStatusEvento(existing.status);
+  let novoStatus = parsed.data.status;
+  if (parsed.data.cancelada !== undefined) {
+    novoStatus = parsed.data.cancelada
+      ? "CANCELADA"
+      : statusAtual === "CANCELADA"
+      ? "EM_PRODUCAO"
+      : statusAtual;
+  }
+
+  if (novoStatus !== undefined && novoStatus !== statusAtual) {
+    patch.status = novoStatus;
     changes.push({
       campo: "Status",
-      antes: STATUS_CONFIG[existing.status].label,
-      depois: STATUS_CONFIG[parsed.data.status].label,
+      antes: STATUS_CONFIG[statusAtual].label,
+      depois: STATUS_CONFIG[novoStatus].label,
     });
   }
 

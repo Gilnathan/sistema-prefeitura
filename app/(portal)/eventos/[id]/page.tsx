@@ -9,6 +9,7 @@ import {
   listSecretarias,
 } from "@/lib/firestore-repo";
 import { EventoDetailClient } from "@/components/evento-detail-client";
+import { resolverTipoEventoEfetivo } from "@/lib/utils";
 
 export default async function EventoDetailPage({
   params,
@@ -69,6 +70,7 @@ export default async function EventoDetailPage({
       evento={{
         id: evento.id,
         titulo: evento.titulo,
+        tipo: resolverTipoEventoEfetivo(evento.tipo, evento.dataRealizacao),
         dataRealizacao: evento.dataRealizacao,
         local: evento.local,
         resumo: evento.resumo,

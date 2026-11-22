@@ -1,6 +1,8 @@
 export type Role = "ADMIN" | "SECRETARIA";
 
-export type EventoStatus = "NOVO" | "EM_PRODUCAO" | "PUBLICADO";
+export type EventoStatus = "NOVO" | "EM_PRODUCAO" | "PUBLICADO" | "CANCELADA";
+
+export type EventoTipo = "REALIZADA" | "FUTURA";
 
 export type MidiaTipo = "FOTO" | "VIDEO" | "OUTRO";
 
@@ -62,6 +64,7 @@ export interface UserDoc {
 export interface EventoDoc {
   id: string;
   titulo: string;
+  tipo?: EventoTipo;
   dataRealizacao: string; // ISO string (UTC noon)
   local: string;
   resumo: string;

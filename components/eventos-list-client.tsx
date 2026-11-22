@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import type { EventoStatus } from "@/lib/types";
+import { useRouter } from "next/navigation";
+import type { EventoStatus, EventoTipo } from "@/lib/types";
 import { toast } from "sonner";
 import {
-  Calendar,
   CalendarPlus,
   ChevronLeft,
   ChevronRight,
@@ -15,13 +15,11 @@ import {
   Loader2,
   MapPin,
   Search,
-  SlidersHorizontal,
-  ArrowRight,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -29,8 +27,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { StatusBadge } from "@/components/status-badge";
-import { MESES_PT, formatarDataBR } from "@/lib/utils";
+import { MESES_PT } from "@/lib/utils";
+import type { EventosPaginadosDTO } from "@/lib/data-loaders";
 
 interface SecretariaOption {
   id: string;
@@ -41,6 +39,7 @@ interface SecretariaOption {
 interface EventoListItem {
   id: string;
   titulo: string;
+  tipo: EventoTipo;
   dataRealizacao: string;
   local: string;
   resumo: string;
@@ -56,13 +55,35 @@ interface EventoListItem {
   totalVideos: number;
 }
 
-import type { EventosPaginadosDTO } from "@/lib/data-loaders";
-
 interface EventosListClientProps {
   isAdmin: boolean;
   secretariaNome: string | null;
   secretarias: SecretariaOption[];
   initialData?: EventosPaginadosDTO;
+}
+
+const MESES_CURTOS = [
+  "JAN",
+  "FEV",
+  "MAR",
+  "ABR",
+  "MAI",
+  "JUN",
+  "JUL",
+  "AGO",
+  "SET",
+  "OUT",
+  "NOV",
+  "DEZ",
+];
+
+function extrairPartesData(iso: string) {
+  const d = new Date(iso);
+  return {
+    dia: String(d.getUTCDate()).padStart(2, "0"),
+    mesCurto: MESES_CURTOS[d.getUTCMonth()] || "",
+    ano: d.getUTCFullYear(),
+  };
 }
 
 export function EventosListClient({
@@ -71,12 +92,13 @@ export function EventosListClient({
   secretarias,
   initialData,
 }: EventosListClientProps) {
+  const router = useRouter();
   const currentYear = new Date().getFullYear();
   const years = [currentYear + 1, currentYear, currentYear - 1, currentYear - 2];
 
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
-  const [status, setStatus] = useState("");
+  const [tipoFiltro, setTipoFiltro] = useState<"" | EventoTipo | "CANCELADA">("");
   const [secretariaId, setSecretariaId] = useState("TODAS");
   const [mes, setMes] = useState("");
   const [ano, setAno] = useState("");
@@ -116,7 +138,7 @@ export function EventosListClient({
     const timer = setTimeout(() => {
       setDebouncedQ(q);
       setPage(1);
-    }, 350);
+    }, 300);
     return () => clearTimeout(timer);
   }, [q]);
 
@@ -128,7 +150,7 @@ export function EventosListClient({
         pageSize: "10",
       });
       if (debouncedQ) params.set("q", debouncedQ);
-      if (status) params.set("status", status);
+      if (tipoFiltro) params.set("tipo", tipoFiltro);
       if (isAdmin && secretariaId !== "TODAS") {
         params.set("secretariaId", secretariaId);
       }
@@ -136,7 +158,7 @@ export function EventosListClient({
       if (mes && ano) params.set("mes", mes);
 
       const res = await fetch(`/api/eventos?${params}`);
-      if (!res.ok) throw new Error("Falha ao buscar demandas");
+      if (!res.ok) throw new Error("Falha ao buscar ações");
       const data = await res.json();
       setItems(data.items || []);
       setTotal(data.pagination?.total ?? 0);
@@ -146,7 +168,7 @@ export function EventosListClient({
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedQ, status, isAdmin, secretariaId, ano, mes]);
+  }, [page, debouncedQ, tipoFiltro, isAdmin, secretariaId, ano, mes]);
 
   useEffect(() => {
     if (skipInitialFetch.current) {
@@ -158,26 +180,31 @@ export function EventosListClient({
 
   function limparFiltros() {
     setQ("");
-    setStatus("");
+    setTipoFiltro("");
     setSecretariaId("TODAS");
     setMes("");
     setAno("");
     setPage(1);
   }
 
+  const hasFilters = Boolean(
+    q || tipoFiltro || secretariaId !== "TODAS" || mes || ano
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="space-y-5">
+      {/* Cabeçalho limpo */}
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">
+          <h1 className="text-2xl font-semibold tracking-tight text-[#0E3A5D]">
             {isAdmin
-              ? "Ações Realizadas — Todas as Secretarias"
-              : `Ações Realizadas — Secretaria de ${secretariaNome || ""}`}
+              ? "Ações do Município"
+              : `Ações — ${secretariaNome || "Secretaria"}`}
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {isAdmin
-              ? "Acompanhe ações realizadas, relatórios e mídias enviados pelas secretarias municipais."
-              : "Acompanhe as ações realizadas registradas pela sua secretaria e o andamento da publicação."}
+              ? "Acompanhamento de ações realizadas e agendadas pelas secretarias."
+              : "Registro de ações realizadas e agenda da sua secretaria."}
           </p>
         </div>
 
@@ -189,258 +216,337 @@ export function EventosListClient({
         </Button>
       </div>
 
-      {/* Filtros */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
-            <div className="relative lg:col-span-4">
-              <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Buscar por título, local ou resumo..."
-                className="pl-9"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
-            </div>
-
-            {isAdmin && (
-              <div className="lg:col-span-3">
-                <select
-                  aria-label="Filtrar por Secretaria"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  value={secretariaId}
-                  onChange={(e) => {
-                    setSecretariaId(e.target.value);
-                    setPage(1);
-                  }}
-                >
-                  <option value="TODAS">Todas as Secretarias</option>
-                  {secretarias.map((sec) => (
-                    <option key={sec.id} value={sec.id}>
-                      {sec.nome}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div className={isAdmin ? "lg:col-span-2" : "lg:col-span-3"}>
-              <select
-                aria-label="Filtrar por Status"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={status}
-                onChange={(e) => {
-                  setStatus(e.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="">Todos os Status</option>
-                <option value="NOVO">Novo</option>
-                <option value="EM_PRODUCAO">Em Produção</option>
-                <option value="PUBLICADO">Publicado</option>
-              </select>
-            </div>
-
-            <div className={isAdmin ? "lg:col-span-2" : "lg:col-span-3"}>
-              <select
-                aria-label="Filtrar por Mês"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={mes}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setMes(val);
-                  if (val && !ano) setAno(String(currentYear));
-                  setPage(1);
-                }}
-              >
-                <option value="">Todos os Meses</option>
-                {MESES_PT.map((nomeMes, i) => (
-                  <option key={nomeMes} value={String(i + 1)}>
-                    {String(i + 1).padStart(2, "0")} - {nomeMes}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className={isAdmin ? "lg:col-span-1" : "lg:col-span-2"}>
-              <select
-                aria-label="Filtrar por Ano"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={ano}
-                onChange={(e) => {
-                  setAno(e.target.value);
-                  if (!e.target.value) setMes("");
-                  setPage(1);
-                }}
-              >
-                <option value="">Ano</option>
-                {years.map((y) => (
-                  <option key={y} value={String(y)}>
-                    {y}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1.5">
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              {total} {total === 1 ? "evento encontrado" : "eventos encontrados"}
-            </span>
-            {(q || status || secretariaId !== "TODAS" || mes || ano) && (
+      {/* Abas limpas + legenda discreta de cor */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-border/80">
+        <div className="flex items-center gap-6 -mb-px overflow-x-auto">
+          {(
+            [
+              { value: "", label: "Todas" },
+              { value: "REALIZADA", label: "Realizadas" },
+              { value: "FUTURA", label: "Futuras" },
+              { value: "CANCELADA", label: "Canceladas" },
+            ] as const
+          ).map((tab) => {
+            const active = tipoFiltro === tab.value;
+            return (
               <button
+                key={tab.label}
                 type="button"
-                onClick={limparFiltros}
-                className="text-primary hover:underline font-medium"
+                onClick={() => {
+                  setTipoFiltro(tab.value);
+                  setPage(1);
+                }}
+                className={`relative pb-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
+                  active
+                    ? "text-[#0E3A5D]"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
               >
-                Limpar filtros
+                {tab.label}
+                {active && (
+                  <span
+                    className={`absolute inset-x-0 bottom-0 h-0.5 rounded-full ${
+                      tab.value === "FUTURA"
+                        ? "bg-sky-600"
+                        : tab.value === "REALIZADA"
+                        ? "bg-[#128C23]"
+                        : tab.value === "CANCELADA"
+                        ? "bg-red-500"
+                        : "bg-[#0E3A5D]"
+                    }`}
+                  />
+                )}
               </button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+            );
+          })}
+        </div>
 
-      {/* Lista de Eventos */}
+        <div className="hidden sm:flex items-center gap-4 pb-2 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-[#128C23]" />
+            Realizada
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-sky-500" />
+            Futura
+          </span>
+          <span className="text-border">|</span>
+          <span>
+            {total} {total === 1 ? "registro" : "registros"}
+          </span>
+        </div>
+      </div>
+
+      {/* Barra de busca e filtros enxuta (sem caixa pesada) */}
+      <div className="flex flex-col lg:flex-row lg:items-center gap-2.5">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground/70" />
+          <Input
+            placeholder="Buscar por título, local ou resumo..."
+            className="pl-9 h-9 bg-white border-border/80 text-sm"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
+          {isAdmin && (
+            <select
+              aria-label="Filtrar por Secretaria"
+              className="h-9 rounded-md border border-border/80 bg-white px-2.5 text-xs sm:text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              value={secretariaId}
+              onChange={(e) => {
+                setSecretariaId(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="TODAS">Todas Secretarias</option>
+              {secretarias.map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.nome}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <select
+            aria-label="Filtrar por Mês"
+            className="h-9 rounded-md border border-border/80 bg-white px-2.5 text-xs sm:text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={mes}
+            onChange={(e) => {
+              const val = e.target.value;
+              setMes(val);
+              if (val && !ano) setAno(String(currentYear));
+              setPage(1);
+            }}
+          >
+            <option value="">Mês</option>
+            {MESES_PT.map((nomeMes, i) => (
+              <option key={nomeMes} value={String(i + 1)}>
+                {nomeMes}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Filtrar por Ano"
+            className="h-9 rounded-md border border-border/80 bg-white px-2.5 text-xs sm:text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={ano}
+            onChange={(e) => {
+              setAno(e.target.value);
+              if (!e.target.value) setMes("");
+              setPage(1);
+            }}
+          >
+            <option value="">Ano</option>
+            {years.map((y) => (
+              <option key={y} value={String(y)}>
+                {y}
+              </option>
+            ))}
+          </select>
+
+          {hasFilters && (
+            <button
+              type="button"
+              onClick={limparFiltros}
+              className="col-span-2 sm:col-span-1 inline-flex items-center justify-center gap-1 h-9 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+              Limpar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Lista Unificada Clean (sem excesso de bordas/pílulas) */}
       {loading ? (
         <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          <span className="text-sm">Carregando demandas...</span>
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span className="text-sm">Carregando...</span>
         </div>
       ) : items.length === 0 ? (
-        <Card>
-          <CardContent className="py-16 text-center space-y-3">
-            <p className="text-base font-medium">Nenhuma demanda encontrada</p>
-            <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              Não há eventos registrados para os filtros selecionados. Clique abaixo para cadastrar uma nova ação.
-            </p>
-            <Button asChild className="mt-2">
+        <div className="rounded-xl border border-dashed bg-white py-14 px-4 text-center space-y-2.5">
+          <p className="text-sm font-medium text-foreground">
+            Nenhuma ação encontrada
+          </p>
+          <p className="text-xs text-muted-foreground max-w-sm mx-auto">
+            Ajuste os filtros acima ou registre uma nova ação realizada ou agendada.
+          </p>
+          <div className="pt-1">
+            <Button asChild size="sm">
               <Link href="/eventos/novo">
                 <CalendarPlus className="h-4 w-4" />
-                Cadastrar Primeiro Evento
+                Nova Ação
               </Link>
             </Button>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : (
-        <div className="space-y-3">
-          {items.map((ev, index) => (
-            <Card
-              key={ev.id}
-              className="group card-interactive animate-fade-up"
-              style={{ animationDelay: `${Math.min(index * 35, 280)}ms` }}
-            >
-              <CardContent className="p-4 sm:p-5">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-1.5 min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge status={ev.status} />
-                      <span className="inline-flex items-center rounded-md bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
-                        {ev.secretaria.nome}
-                      </span>
-                      {ev.isParceira && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 text-sky-800 border border-sky-200 px-2 py-0.5 text-[11px] font-semibold">
-                          <Handshake className="h-3 w-3" />
-                          Parceira
-                        </span>
-                      )}
-                      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                        <Calendar className="h-3.5 w-3.5 text-primary/80" />
-                        {formatarDataBR(ev.dataRealizacao)}
-                      </span>
-                      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                        <MapPin className="h-3.5 w-3.5 text-primary/80" />
-                        {ev.local}
-                      </span>
-                    </div>
+        <div className="rounded-xl border border-border/80 bg-white overflow-hidden divide-y divide-border/60 shadow-2xs">
+          {items.map((ev) => {
+            const isCancelada = ev.status === "CANCELADA";
+            const isFutura = ev.tipo === "FUTURA" && !isCancelada;
+            const { dia, mesCurto } = extrairPartesData(ev.dataRealizacao);
+            const parceirosNomes = [
+              ...(ev.secretariasParceiras?.map((p) => p.nome) || []),
+              ...(ev.orgaosParceirosExternos || []),
+            ];
 
+            return (
+              <div
+                key={ev.id}
+                onClick={() => router.push(`/eventos/${ev.id}`)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    router.push(`/eventos/${ev.id}`);
+                  }
+                }}
+                className={`group relative flex flex-col sm:flex-row sm:items-center gap-3.5 sm:gap-5 px-4 sm:px-5 py-4 cursor-pointer transition-colors border-l-[3px] ${
+                  isCancelada
+                    ? "border-l-red-400 bg-red-50/20 hover:bg-red-50/40 opacity-80"
+                    : isFutura
+                    ? "border-l-sky-500 bg-sky-50/30 hover:bg-sky-50/65"
+                    : "border-l-[#128C23] bg-white hover:bg-slate-50/75"
+                }`}
+              >
+                {/* Bloco de Data Minimalista */}
+                <div className="flex sm:flex-col items-center sm:justify-center gap-2 sm:gap-0 sm:w-14 shrink-0">
+                  <div
+                    className={`flex sm:flex-col items-baseline sm:items-center gap-1 sm:gap-0 rounded-lg px-2.5 py-1 sm:py-1.5 sm:w-14 text-center ${
+                      isCancelada
+                        ? "bg-red-100/70 text-red-800"
+                        : isFutura
+                        ? "bg-sky-100/80 text-sky-900"
+                        : "bg-slate-100/90 text-slate-800"
+                    }`}
+                  >
+                    <span className="text-base sm:text-lg font-bold leading-none tabular-nums">
+                      {dia}
+                    </span>
+                    <span className="text-[10px] font-semibold tracking-wider uppercase opacity-75">
+                      {mesCurto}
+                    </span>
+                  </div>
+                  <span
+                    className={`text-[10px] font-semibold uppercase tracking-wide sm:mt-1 ${
+                      isCancelada
+                        ? "text-red-600"
+                        : isFutura
+                        ? "text-sky-700"
+                        : "text-[#128C23]"
+                    }`}
+                  >
+                    {isCancelada ? "Cancelada" : isFutura ? "Futura" : "Realizada"}
+                  </span>
+                </div>
+
+                {/* Conteúdo Principal */}
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <Link
                       href={`/eventos/${ev.id}`}
-                      className="block text-base sm:text-lg font-semibold hover:text-primary transition-colors truncate"
+                      onClick={(e) => e.stopPropagation()}
+                      className={`text-[15px] font-semibold transition-colors truncate ${
+                        isCancelada
+                          ? "line-through text-muted-foreground"
+                          : "text-foreground group-hover:text-[#0E3A5D]"
+                      }`}
                     >
                       {ev.titulo}
                     </Link>
-
-                    <p className="text-sm text-muted-foreground line-clamp-2">
-                      {ev.resumo}
-                    </p>
-
-                    {((ev.secretariasParceiras && ev.secretariasParceiras.length > 0) ||
-                      (ev.orgaosParceirosExternos && ev.orgaosParceirosExternos.length > 0)) && (
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px] text-muted-foreground">
-                        <Handshake className="h-3.5 w-3.5 text-primary shrink-0" />
-                        <span>Parceria:</span>
-                        {ev.secretariasParceiras?.map((p) => (
-                          <span
-                            key={p.id}
-                            className="rounded-full bg-primary/10 text-primary px-2 py-0.5 font-medium"
-                          >
-                            Sec. {p.nome}
-                          </span>
-                        ))}
-                        {ev.orgaosParceirosExternos?.map((org) => (
-                          <span
-                            key={org}
-                            className="rounded-full bg-muted px-2 py-0.5 font-medium text-foreground/80"
-                          >
-                            {org}
-                          </span>
-                        ))}
-                      </div>
+                    {ev.isParceira && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700">
+                        <Handshake className="h-3 w-3" />
+                        Parceira
+                      </span>
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between md:flex-col md:items-end gap-3 shrink-0 border-t md:border-t-0 pt-3 md:pt-0">
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1">
-                        <ImageIcon className="h-3.5 w-3.5 text-primary" />
-                        {ev.totalFotos} foto{ev.totalFotos === 1 ? "" : "s"}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <Film className="h-3.5 w-3.5 text-[#1373E6]" />
-                        {ev.totalVideos} vídeo{ev.totalVideos === 1 ? "" : "s"}
-                      </span>
-                    </div>
+                  <p className="text-sm text-muted-foreground line-clamp-1">
+                    {ev.resumo}
+                  </p>
 
-                    <div className="flex items-center gap-1.5">
-                      <Button asChild variant="outline" size="sm" className="group-hover:border-primary/50 group-hover:text-primary">
-                        <Link href={`/eventos/${ev.id}`}>
-                          Abrir Ação
-                          <ArrowRight className="h-3.5 w-3.5 transition-transform duration-150 group-hover:translate-x-0.5" />
-                        </Link>
-                      </Button>
-                      {isAdmin && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:border-destructive/50"
-                          title="Excluir ação"
-                          onClick={() => setDeleteTarget(ev)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground/90 pt-0.5">
+                    <span className="font-medium text-foreground/80">
+                      {ev.secretaria.nome}
+                    </span>
+                    <span className="text-border">•</span>
+                    <span className="inline-flex items-center gap-1 truncate max-w-[240px]">
+                      <MapPin className="h-3 w-3 shrink-0 opacity-65" />
+                      <span className="truncate">{ev.local}</span>
+                    </span>
+                    {parceirosNomes.length > 0 && (
+                      <>
+                        <span className="text-border">•</span>
+                        <span className="inline-flex items-center gap-1 text-muted-foreground">
+                          <Handshake className="h-3 w-3 shrink-0 text-primary/80" />
+                          <span>{parceirosNomes.join(", ")}</span>
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+
+                {/* Coluna Direita: mídias e ações */}
+                <div className="flex items-center justify-between sm:justify-end gap-4 sm:gap-5 pt-2 sm:pt-0 border-t sm:border-t-0 border-border/50 shrink-0">
+                  {/* Contagem de mídias sutil */}
+                  <div className="flex items-center gap-2.5 text-xs text-muted-foreground tabular-nums">
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={`${ev.totalFotos} foto(s)`}
+                    >
+                      <ImageIcon className="h-3.5 w-3.5 opacity-70" />
+                      {ev.totalFotos}
+                    </span>
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={`${ev.totalVideos} vídeo(s)`}
+                    >
+                      <Film className="h-3.5 w-3.5 opacity-70" />
+                      {ev.totalVideos}
+                    </span>
+                  </div>
+
+                  {/* Ações */}
+                  <div className="flex items-center gap-1">
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        title="Excluir ação"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteTarget(ev);
+                        }}
+                        className="p-1.5 rounded-md text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                    <ChevronRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-foreground group-hover:translate-x-0.5 transition-all" />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Paginação Server-Side */}
+      {/* Paginação */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between pt-2">
-          <p className="text-sm text-muted-foreground">
+        <div className="flex items-center justify-between pt-1">
+          <p className="text-xs text-muted-foreground">
             Página <span className="font-medium text-foreground">{page}</span> de{" "}
             <span className="font-medium text-foreground">{totalPages}</span>
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Button
               variant="outline"
               size="sm"
+              className="h-8 bg-white"
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
             >
@@ -450,6 +556,7 @@ export function EventosListClient({
             <Button
               variant="outline"
               size="sm"
+              className="h-8 bg-white"
               disabled={page >= totalPages}
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             >
@@ -459,6 +566,7 @@ export function EventosListClient({
           </div>
         </div>
       )}
+
       {/* Modal Confirmar Exclusão de Ação (somente ADMIN) */}
       <Dialog
         open={Boolean(deleteTarget)}

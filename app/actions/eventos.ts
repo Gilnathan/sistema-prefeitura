@@ -19,7 +19,7 @@ export async function atualizarStatusEventoAction(
     return { error: "Apenas a agência (ADMIN) pode alterar o status." };
   }
 
-  if (!["NOVO", "EM_PRODUCAO", "PUBLICADO"].includes(status)) {
+  if (!["EM_PRODUCAO", "PUBLICADO", "CANCELADA"].includes(status)) {
     return { error: "Status inválido." };
   }
 

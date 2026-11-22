@@ -77,32 +77,44 @@ export const updateUsuarioSchema = z.object({
   ativo: z.boolean().optional(),
 });
 
-export const createEventoSchema = z.object({
-  titulo: z.string().trim().min(3, "Informe o título do evento").max(200),
-  dataRealizacao: z.string().min(8, "Informe a data de realização"),
-  local: z.string().trim().min(2, "Informe o local do evento").max(200),
-  resumo: z.string().trim().min(10, "Informe um resumo objetivo (mín. 10 caracteres)").max(4000),
-  relatorioCompleto: z
-    .string()
-    .trim()
-    .min(10, "Preencha o relatório completo do evento (mín. 10 caracteres)")
-    .max(30000),
-  secretariaId: z.string().optional(),
-  secretariasParceirasIds: z.array(z.string().min(1)).max(30).optional().default([]),
-  orgaosParceirosExternos: z
-    .array(z.string().trim().min(2).max(120))
-    .max(30)
-    .optional()
-    .default([]),
-});
+export const createEventoSchema = z
+  .object({
+    titulo: z.string().trim().min(3, "Informe o título da ação").max(200),
+    tipo: z.enum(["REALIZADA", "FUTURA"]).optional().default("REALIZADA"),
+    dataRealizacao: z.string().min(8, "Informe a data de realização"),
+    local: z.string().trim().min(2, "Informe o local da ação").max(200),
+    resumo: z
+      .string()
+      .trim()
+      .min(10, "Informe um resumo objetivo (mín. 10 caracteres)")
+      .max(4000),
+    relatorioCompleto: z.string().trim().max(30000).optional().default(""),
+    secretariaId: z.string().optional(),
+    secretariasParceirasIds: z.array(z.string().min(1)).max(30).optional().default([]),
+    orgaosParceirosExternos: z
+      .array(z.string().trim().min(2).max(120))
+      .max(30)
+      .optional()
+      .default([]),
+  })
+  .refine(
+    (data) =>
+      data.tipo === "FUTURA" || data.relatorioCompleto.trim().length >= 10,
+    {
+      message: "Preencha o relatório completo da ação (mín. 10 caracteres)",
+      path: ["relatorioCompleto"],
+    }
+  );
 
 export const updateEventoSchema = z.object({
   titulo: z.string().trim().min(3).max(200).optional(),
+  tipo: z.enum(["REALIZADA", "FUTURA"]).optional(),
   dataRealizacao: z.string().min(8).optional(),
   local: z.string().trim().min(2).max(200).optional(),
   resumo: z.string().trim().min(10).max(4000).optional(),
-  relatorioCompleto: z.string().trim().min(10).max(30000).optional(),
-  status: z.enum(["NOVO", "EM_PRODUCAO", "PUBLICADO"]).optional(),
+  relatorioCompleto: z.string().trim().max(30000).optional(),
+  status: z.enum(["EM_PRODUCAO", "PUBLICADO", "CANCELADA"]).optional(),
+  cancelada: z.boolean().optional(),
   secretariasParceirasIds: z.array(z.string().min(1)).max(30).optional(),
   orgaosParceirosExternos: z.array(z.string().trim().min(2).max(120)).max(30).optional(),
 });

@@ -5,6 +5,7 @@ import type {
   EventoLogChange,
   EventoLogDoc,
   EventoStatus,
+  EventoTipo,
   LoginSlideDoc,
   MidiaDoc,
   MidiaTipo,
@@ -467,6 +468,7 @@ export async function getEventoById(id: string): Promise<EventoDoc | null> {
 
 export async function createEventoDoc(data: {
   titulo: string;
+  tipo?: EventoTipo;
   dataRealizacao: string;
   local: string;
   resumo: string;
@@ -485,6 +487,7 @@ export async function createEventoDoc(data: {
   const ref = db.collection(COLLECTIONS.EVENTOS).doc();
   const payload: Omit<EventoDoc, "id"> = {
     titulo: data.titulo.trim(),
+    tipo: data.tipo ?? "REALIZADA",
     dataRealizacao: data.dataRealizacao,
     local: data.local.trim(),
     resumo: data.resumo.trim(),
@@ -505,7 +508,6 @@ export async function createEventoDoc(data: {
     updatedAt: ts,
   };
   await ref.set(payload);
-  invalidateSecretariasCache();
   return { id: ref.id, ...payload };
 }
 
@@ -513,6 +515,7 @@ export async function updateEventoDoc(
   id: string,
   patch: Partial<{
     titulo: string;
+    tipo: EventoTipo;
     dataRealizacao: string;
     local: string;
     resumo: string;
@@ -534,6 +537,7 @@ export async function updateEventoDoc(
   const ts = nowIso();
   const updates: Record<string, unknown> = { updatedAt: ts };
   if (patch.titulo !== undefined) updates.titulo = patch.titulo.trim();
+  if (patch.tipo !== undefined) updates.tipo = patch.tipo;
   if (patch.dataRealizacao !== undefined) {
     updates.dataRealizacao = patch.dataRealizacao;
   }
