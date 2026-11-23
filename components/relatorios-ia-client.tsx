@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -115,6 +115,13 @@ export function RelatoriosIAClient({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [asking, setAsking] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  function handleCancelAsk() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setAsking(false);
+  }
 
   async function handleSaveConfig(e: React.FormEvent) {
     e.preventDefault();
@@ -199,10 +206,15 @@ export function RelatoriosIAClient({
     if (!textoPergunta) setPergunta("");
     setAsking(true);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 35_000);
+
     try {
       const res = await fetch("/api/relatorios/ia", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           pergunta: q,
           secretariaId,
@@ -213,9 +225,9 @@ export function RelatoriosIAClient({
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || "Erro ao consultar IA");
+        throw new Error(data.error || `Erro ao consultar IA (HTTP ${res.status})`);
       }
 
       const modelMsg: ChatMessage = {
@@ -227,9 +239,19 @@ export function RelatoriosIAClient({
       };
       setMessages((prev) => [...prev, modelMsg]);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Falha na consulta.");
+      const isAbort =
+        err instanceof DOMException && err.name === "AbortError";
+      toast.error(
+        isAbort
+          ? "A consulta excedeu o tempo limite ou foi cancelada. Tente novamente."
+          : err instanceof Error
+          ? err.message
+          : "Falha na consulta."
+      );
       setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
     } finally {
+      clearTimeout(timeoutId);
+      abortControllerRef.current = null;
       setAsking(false);
     }
   }
@@ -669,9 +691,18 @@ export function RelatoriosIAClient({
                   ))}
 
                   {asking && (
-                    <div className="flex items-center gap-2.5 text-xs text-muted-foreground pl-11">
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      <span>Analisando registros no banco de dados...</span>
+                    <div className="flex items-center justify-between gap-2.5 text-xs text-muted-foreground pl-11">
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        Analisando registros no banco de dados...
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCancelAsk}
+                        className="text-xs text-muted-foreground hover:text-destructive underline"
+                      >
+                        Cancelar
+                      </button>
                     </div>
                   )}
                 </div>

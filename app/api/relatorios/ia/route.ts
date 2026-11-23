@@ -12,6 +12,8 @@ import {
   resolverTipoEventoEfetivo,
 } from "@/lib/utils";
 
+export const maxDuration = 30;
+
 const querySchema = z.object({
   pergunta: z.string().trim().min(3, "Digite sua pergunta para consultar o banco.").max(1500),
   secretariaId: z.string().optional().default("TODAS"),
@@ -128,6 +130,43 @@ export async function POST(req: Request) {
       : `Ano ${ano}`
     : "Todo o período";
 
+  // Retorno instantâneo (0ms) quando não há registros no filtro selecionado
+  if (registrosEstruturados.length === 0) {
+    return NextResponse.json({
+      resposta:
+        "Não foram encontrados registros no banco de dados atual para o filtro selecionado.",
+      eventosRelacionados: [],
+      meta: {
+        registrosAnalisados: 0,
+        escopoSecretaria,
+        escopoPeriodo,
+        model: config.model,
+      },
+    });
+  }
+
+  // Formato textual compacto e limpo (apenas dados textuais: zero imagens, ~40% menos tokens que JSON)
+  const baseCompacta = registrosEstruturados
+    .map((r, idx) => {
+      const resumoLimpo = r.resumo.replace(/\s+/g, " ").trim().slice(0, 500);
+      const relatorioLimpo = r.relatorioCompleto
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 2200);
+      const linhas = [
+        `#${idx + 1} | ID: ${r.id} | Data: ${r.data} | Situação: ${r.situacao} | Secretaria: ${r.secretaria}`,
+        `Título: ${r.titulo} | Local: ${r.local}${
+          r.parceiros.length > 0 ? ` | Parceiros: ${r.parceiros.join(", ")}` : ""
+        }`,
+        `Resumo: ${resumoLimpo}`,
+      ];
+      if (relatorioLimpo) {
+        linhas.push(`Relatório: ${relatorioLimpo}`);
+      }
+      return linhas.join("\n");
+    })
+    .join("\n---\n");
+
   // 2. Monta o System Prompt estritamente fechado nos dados do banco + formato humano sem markdown cru
   const systemInstruction = `Você é o Analista de Dados Interno da Prefeitura Municipal de Belmonte (Bahia).
 
@@ -138,10 +177,10 @@ REGRAS OBRIGATÓRIAS E INEGOCIÁVEIS:
 4. ESTILO DE ESCRITA HUMANA:
    - Escreva em português brasileiro natural, claro, cordial e direto, como um assessor respondendo pessoalmente ao gestor.
    - NUNCA use asteriscos (* ou **), cerquilhas (# ou ###), chaves ({}), crases, traços de separação (---) ou qualquer formatação Markdown.
-   - Para relatórios gerais, contagens ou resumos (ex.: quantos atendimentos médicos, odontológicos ou pediátricos houve no período), escreva em texto corrido bem organizado em parágrafos curtos e fáceis de ler.
+   - Para relatórios gerais, contagens ou resumos (ex.: quantos atendimentos médicos, odontológicos, pediátricos ou testes rápidos houve no período), escreva em texto corrido bem organizado em parágrafos curtos e fáceis de ler.
    - Quando listar vários itens no texto, use apenas frases naturais ou numeração simples (1., 2., 3.) sem símbolos técnicos.
 5. LINKS INTERNOS DO SISTEMA:
-   - Sempre inclua no campo "eventosRelacionadosIds" os IDs exatos (campo "id" do banco) de todos os eventos mencionados ou encontrados na sua resposta, para que o sistema exiba links clicáveis diretos para cada um deles.
+   - Sempre inclua no campo "eventosRelacionadosIds" os IDs exatos (campo "ID" de cada registro) de todos os eventos mencionados ou encontrados na sua resposta, para que o sistema exiba links clicáveis diretos para cada um deles.
    - Se nenhum evento específico corresponder, retorne "eventosRelacionadosIds": [].
 
 FORMATO OBRIGATÓRIO DA RESPOSTA (JSON válido):
@@ -157,7 +196,7 @@ ESCOPO ATUAL DA CONSULTA:
 - Total de registros carregados neste escopo: ${registrosEstruturados.length}
 
 <BANCO_DE_DADOS>
-${JSON.stringify(registrosEstruturados)}
+${baseCompacta}
 </BANCO_DE_DADOS>`;
 
   const contents = [
@@ -176,7 +215,6 @@ ${JSON.stringify(registrosEstruturados)}
     "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash",
   ].filter((m, idx, arr) => Boolean(m) && arr.indexOf(m) === idx);
 
   const requestBody = JSON.stringify({
@@ -187,8 +225,11 @@ ${JSON.stringify(registrosEstruturados)}
     generationConfig: {
       temperature: 0.1,
       topP: 0.8,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 1536,
       responseMimeType: "application/json",
+      thinkingConfig: {
+        thinkingLevel: "LOW",
+      },
     },
   });
 
@@ -217,12 +258,22 @@ ${JSON.stringify(registrosEstruturados)}
         modelName
       )}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
 
-      const geminiRes = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: requestBody,
-        cache: "no-store",
-      });
+      let geminiRes: Response;
+      try {
+        // Timeout rígido de 12s por modelo para nunca travar esperando
+        geminiRes = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: requestBody,
+          cache: "no-store",
+          signal: AbortSignal.timeout(12_000),
+        });
+      } catch {
+        lastStatus = 504;
+        lastErrorMsg =
+          "O servidor da IA demorou para responder. Tentando novamente em seguida...";
+        continue;
+      }
 
       const data = (await geminiRes.json().catch(() => ({}))) as {
         candidates?: {
