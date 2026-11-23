@@ -817,7 +817,7 @@ export async function deleteLoginSlideDoc(id: string): Promise<boolean> {
 // ============================================================================
 
 const GEMINI_CONFIG_DOC_ID = "gemini_config";
-export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 const DEPRECATED_GEMINI_MODELS = new Set([
   "gemini-2.5-flash",
