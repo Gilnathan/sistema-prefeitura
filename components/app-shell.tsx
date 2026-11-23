@@ -34,6 +34,11 @@ export function AppShell({ user, children }: AppShellProps) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  async function handleSignOut() {
+    await signOut({ redirect: false });
+    window.location.assign("/login");
+  }
+
   const navItems = [
     {
       href: "/dashboard",
@@ -153,7 +158,7 @@ export function AppShell({ user, children }: AppShellProps) {
             variant="outline"
             size="sm"
             className="w-full justify-start bg-transparent border-white/20 text-sky-50 hover:bg-white/10 hover:text-white"
-            onClick={() => signOut({ callbackUrl: "/login" })}
+            onClick={handleSignOut}
           >
             <LogOut className="h-4 w-4" />
             Sair do sistema
@@ -222,7 +227,7 @@ export function AppShell({ user, children }: AppShellProps) {
               size="sm"
               variant="outline"
               className="bg-transparent border-white/25 text-white hover:bg-white/10"
-              onClick={() => signOut({ callbackUrl: "/login" })}
+              onClick={handleSignOut}
             >
               <LogOut className="h-4 w-4" />
               Sair
