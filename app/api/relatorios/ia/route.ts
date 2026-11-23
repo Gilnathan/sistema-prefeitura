@@ -9,6 +9,7 @@ import {
 import {
   MESES_PT,
   formatarDataBR,
+  getHojeBahiaISO,
   normalizarStatusEvento,
   resolverTipoEventoEfetivo,
 } from "@/lib/utils";
@@ -33,9 +34,10 @@ const querySchema = z.object({
       z.object({
         role: z.enum(["user", "model"]),
         text: z.string(),
+        eventosRelacionadosIds: z.array(z.string()).optional(),
       })
     )
-    .max(8)
+    .max(24)
     .optional()
     .default([]),
 });
@@ -234,15 +236,22 @@ export async function POST(req: Request) {
         .join(" | "),
   ].join("\n");
 
-  // 3. Ranqueamento lexical local (< 10ms) para escalar para 500–600+ ações mantendo o prompt ultraleve
-  const termos = extrairTermosRelevantes(pergunta);
-  const perguntaNorm = normalizarTextoBusca(pergunta);
+  // 3. Ranqueamento lexical local considerando a pergunta atual + contexto recente da conversa
+  const contextoBusca = [
+    ...historico.slice(-4).map((h) => h.text),
+    pergunta,
+  ].join(" ");
+  const termos = extrairTermosRelevantes(contextoBusca);
+  const perguntaNorm = normalizarTextoBusca(contextoBusca);
+  const idsJaCitadosNoHistorico = new Set(
+    historico.flatMap((h) => h.eventosRelacionadosIds || [])
+  );
 
   const pontuados = registros.map((r) => {
     const corpus = normalizarTextoBusca(
       `${r.titulo} ${r.secretaria} ${r.local} ${r.data} ${r.parceiros.join(" ")} ${r.resumo} ${r.relatorioCompleto}`
     );
-    let score = 0;
+    let score = idsJaCitadosNoHistorico.has(r.id) ? 6 : 0;
     for (const termo of termos) {
       if (corpus.includes(termo)) score += 3;
     }
@@ -287,15 +296,20 @@ export async function POST(req: Request) {
     })
     .join("\n---\n");
 
+  const hojeBahiaBR = formatarDataBR(`${getHojeBahiaISO()}T12:00:00.000Z`);
+
   const systemInstruction = `Você é o Analista de Dados Interno da Prefeitura Municipal de Belmonte (Bahia).
+DATA DE HOJE (horário de Belmonte/Bahia): ${hojeBahiaBR}.
 
 REGRAS OBRIGATÓRIAS:
 1. Responda EXCLUSIVAMENTE com base no <RESUMO_ESTATISTICO> e nos registros em <REGISTROS_DETALHADOS> (e <INDICE_ADICIONAL> se houver).
 2. NUNCA use conhecimento externo, internet ou invente números/eventos. Se a informação não existir nos registros, responda claramente que não foram encontrados registros com essa informação para o filtro selecionado.
-3. ESCRITA HUMANA E LIMPA:
+3. CONVERSA CONTÍNUA:
+   - Mantenha a continuidade natural da conversa usando o histórico de mensagens anteriores. Quando o usuário fizer perguntas de acompanhamento como "e qual foi essa ação?", "me dê mais detalhes", "quem participou?", responda diretamente sobre o assunto/ação que acabou de ser falado.
+4. ESCRITA HUMANA E LIMPA:
    - Escreva em português brasileiro natural, fluido e direto, em texto corrido com parágrafos curtos.
    - NUNCA use asteriscos (* ou **), cerquilhas (#), chaves ({}), crases ou linhas "---".
-4. LINKS INTERNOS:
+5. LINKS INTERNOS:
    - Inclua em "eventosRelacionadosIds" os IDs exatos (campo "ID") de todas as ações citadas ou encontradas na resposta, para o sistema gerar os links clicáveis.
 
 RETORNE APENAS JSON VÁLIDO:
@@ -318,10 +332,21 @@ ${baseDetalhada}
       : ""
   }`;
 
+  // Mantém o histórico do modelo no mesmo formato JSON da saída para garantir continuidade multi-turn impecável
   const contents = [
     ...historico.map((msg) => ({
       role: msg.role,
-      parts: [{ text: msg.text }],
+      parts: [
+        {
+          text:
+            msg.role === "model"
+              ? JSON.stringify({
+                  resposta: msg.text,
+                  eventosRelacionadosIds: msg.eventosRelacionadosIds || [],
+                })
+              : msg.text,
+        },
+      ],
     })),
     {
       role: "user",

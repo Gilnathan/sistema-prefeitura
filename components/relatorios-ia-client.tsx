@@ -232,9 +232,12 @@ export function RelatoriosIAClient({
       text: q,
     };
 
-    const historicoParaEnviar = messages.slice(-6).map((m) => ({
+    const historicoParaEnviar = messages.slice(-20).map((m) => ({
       role: m.role,
       text: m.text,
+      ...(m.role === "model" && m.eventosRelacionados
+        ? { eventosRelacionadosIds: m.eventosRelacionados.map((e) => e.id) }
+        : {}),
     }));
 
     setMessages((prev) => [...prev, userMsg]);
