@@ -54,7 +54,7 @@ export function AppShell({ user, children }: AppShellProps) {
     },
     {
       href: "/relatorios",
-      label: "Relatórios Mensais",
+      label: "Relatórios",
       icon: FileBarChart2,
       roles: ["ADMIN", "SECRETARIA"],
     },

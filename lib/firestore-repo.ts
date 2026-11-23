@@ -6,6 +6,7 @@ import type {
   EventoLogDoc,
   EventoStatus,
   EventoTipo,
+  GeminiConfigDoc,
   LoginSlideDoc,
   MidiaDoc,
   MidiaTipo,
@@ -809,4 +810,69 @@ export async function deleteLoginSlideDoc(id: string): Promise<boolean> {
   if (!snap.exists) return false;
   await ref.delete();
   return true;
+}
+
+// ============================================================================
+// CONFIGURAÇÃO DA API GOOGLE GEMINI (ADMIN)
+// ============================================================================
+
+const GEMINI_CONFIG_DOC_ID = "gemini_config";
+export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+
+export async function getGeminiConfig(): Promise<GeminiConfigDoc | null> {
+  const db = getDb();
+  const snap = await db
+    .collection(COLLECTIONS.APP_SETTINGS)
+    .doc(GEMINI_CONFIG_DOC_ID)
+    .get();
+
+  if (snap.exists) {
+    const data = snap.data() as Partial<GeminiConfigDoc>;
+    if (data.apiKey) {
+      return {
+        apiKey: data.apiKey,
+        model: data.model || DEFAULT_GEMINI_MODEL,
+        updatedAt: data.updatedAt || nowIso(),
+        updatedByEmail: data.updatedByEmail,
+      };
+    }
+  }
+
+  if (process.env.GEMINI_API_KEY) {
+    return {
+      apiKey: process.env.GEMINI_API_KEY,
+      model: DEFAULT_GEMINI_MODEL,
+      updatedAt: nowIso(),
+      updatedByEmail: "Variável de ambiente",
+    };
+  }
+
+  return null;
+}
+
+export async function saveGeminiConfig(data: {
+  apiKey: string;
+  model?: string;
+  updatedByEmail?: string;
+}): Promise<GeminiConfigDoc> {
+  const db = getDb();
+  const payload: GeminiConfigDoc = {
+    apiKey: data.apiKey.trim(),
+    model: (data.model || DEFAULT_GEMINI_MODEL).trim(),
+    updatedAt: nowIso(),
+    updatedByEmail: data.updatedByEmail,
+  };
+  await db
+    .collection(COLLECTIONS.APP_SETTINGS)
+    .doc(GEMINI_CONFIG_DOC_ID)
+    .set(payload, { merge: true });
+  return payload;
+}
+
+export async function deleteGeminiConfig(): Promise<void> {
+  const db = getDb();
+  await db
+    .collection(COLLECTIONS.APP_SETTINGS)
+    .doc(GEMINI_CONFIG_DOC_ID)
+    .delete();
 }

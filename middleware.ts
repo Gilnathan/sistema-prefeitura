@@ -6,9 +6,12 @@ export default withAuth(
     const token = req.nextauth.token;
     const { pathname } = req.nextUrl;
 
-    // Apenas rotas administrativas (/admin/*) são exclusivas do perfil ADMIN.
+    // Rotas administrativas (/admin/*) e Consultas com IA (/relatorios/ia) são exclusivas do perfil ADMIN.
     // /relatorios é acessível a ADMIN (todas) e SECRETARIA (somente a própria).
-    if (pathname.startsWith("/admin") && token?.role !== "ADMIN") {
+    if (
+      (pathname.startsWith("/admin") || pathname.startsWith("/relatorios/ia")) &&
+      token?.role !== "ADMIN"
+    ) {
       return NextResponse.redirect(new URL("/dashboard", req.url));
     }
 

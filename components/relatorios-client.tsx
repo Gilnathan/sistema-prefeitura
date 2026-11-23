@@ -13,6 +13,7 @@ import {
   FileSpreadsheet,
   Loader2,
   Printer,
+  Sparkles,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -286,12 +287,32 @@ export function RelatoriosClient({
 
   return (
     <div className="space-y-6">
+      {/* Navegação interna da aba Relatórios (IA exclusiva para ADMIN) */}
+      {isAdmin && (
+        <div className="no-print flex items-center gap-6 border-b border-border/80 -mb-1 overflow-x-auto">
+          <Link
+            href="/relatorios"
+            className="relative pb-2.5 text-sm font-medium text-[#0E3A5D] whitespace-nowrap"
+          >
+            Prestação de Contas
+            <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-[#0E3A5D]" />
+          </Link>
+          <Link
+            href="/relatorios/ia"
+            className="inline-flex items-center gap-1.5 pb-2.5 text-sm font-medium text-muted-foreground hover:text-foreground whitespace-nowrap transition-colors"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            Consultas com IA
+          </Link>
+        </div>
+      )}
+
       {/* Cabeçalho */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2 text-[#0E3A5D]">
             <FileBarChart2 className="h-6 w-6 text-primary" />
-            Relatórios Mensais — Prestação de Contas
+            Relatórios — Prestação de Contas
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Consolidado de ações em{" "}

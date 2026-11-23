@@ -107,3 +107,10 @@ export interface LoginSlideDoc {
   criadoPorEmail?: string;
   createdAt: string;
 }
+
+export interface GeminiConfigDoc {
+  apiKey: string;
+  model: string;
+  updatedAt: string;
+  updatedByEmail?: string;
+}

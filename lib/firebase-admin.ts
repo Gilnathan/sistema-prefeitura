@@ -8,6 +8,7 @@ export const COLLECTIONS = {
   MIDIAS: "midias",
   EVENTO_LOGS: "evento_logs",
   LOGIN_SLIDES: "login_slides",
+  APP_SETTINGS: "app_settings",
 } as const;
 
 const globalForFirebase = globalThis as unknown as {
