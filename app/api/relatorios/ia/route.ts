@@ -159,62 +159,83 @@ ${JSON.stringify(registrosEstruturados)}
     },
   ];
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    config.model
-  )}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
+  const FALLBACK_MODELS = [
+    config.model,
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+  ].filter((m, idx, arr) => Boolean(m) && arr.indexOf(m) === idx);
+
+  const requestBody = JSON.stringify({
+    systemInstruction: {
+      parts: [{ text: systemInstruction }],
+    },
+    contents,
+    generationConfig: {
+      temperature: 0.1,
+      topP: 0.8,
+      maxOutputTokens: 2048,
+    },
+  });
 
   try {
-    const geminiRes = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: systemInstruction }],
-        },
-        contents,
-        generationConfig: {
-          temperature: 0.1,
-          topP: 0.8,
-          maxOutputTokens: 2048,
-        },
-      }),
-      cache: "no-store",
-    });
+    let lastStatus = 502;
+    let lastErrorMsg = "Os modelos do Google Gemini estão com alta demanda no momento. Tente novamente em instantes.";
 
-    const data = (await geminiRes.json().catch(() => ({}))) as {
-      candidates?: {
-        content?: { parts?: { text?: string }[] };
-      }[];
-      error?: { message?: string };
-    };
+    for (const modelName of FALLBACK_MODELS) {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        modelName
+      )}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
 
-    if (!geminiRes.ok) {
-      return NextResponse.json(
-        {
-          error:
-            data.error?.message ||
-            `Erro na API do Google Gemini (HTTP ${geminiRes.status}).`,
-        },
-        { status: 502 }
-      );
+      const geminiRes = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestBody,
+        cache: "no-store",
+      });
+
+      const data = (await geminiRes.json().catch(() => ({}))) as {
+        candidates?: {
+          content?: { parts?: { text?: string }[] };
+        }[];
+        error?: { message?: string };
+      };
+
+      if (geminiRes.ok) {
+        const resposta =
+          data.candidates?.[0]?.content?.parts
+            ?.map((p) => p.text || "")
+            .join("")
+            .trim() ||
+          "Não foi possível gerar uma resposta a partir dos registros do banco.";
+
+        return NextResponse.json({
+          resposta,
+          meta: {
+            registrosAnalisados: registrosEstruturados.length,
+            escopoSecretaria,
+            escopoPeriodo,
+            model: modelName,
+          },
+        });
+      }
+
+      lastStatus = geminiRes.status;
+      lastErrorMsg =
+        data.error?.message ||
+        `Erro na API do Google Gemini (HTTP ${geminiRes.status}).`;
+
+      // Em pico de demanda (503/429) ou modelo indisponível (404), tenta automaticamente o próximo modelo
+      if (![429, 500, 503, 404].includes(geminiRes.status)) {
+        break;
+      }
     }
 
-    const resposta =
-      data.candidates?.[0]?.content?.parts
-        ?.map((p) => p.text || "")
-        .join("")
-        .trim() ||
-      "Não foi possível gerar uma resposta a partir dos registros do banco.";
-
-    return NextResponse.json({
-      resposta,
-      meta: {
-        registrosAnalisados: registrosEstruturados.length,
-        escopoSecretaria,
-        escopoPeriodo,
-        model: config.model,
-      },
-    });
+    return NextResponse.json(
+      { error: lastErrorMsg },
+      { status: lastStatus === 429 ? 429 : 502 }
+    );
   } catch (err) {
     console.error("[GeminiIA] Falha na consulta:", err);
     return NextResponse.json(
