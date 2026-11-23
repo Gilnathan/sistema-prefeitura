@@ -128,15 +128,27 @@ export async function POST(req: Request) {
       : `Ano ${ano}`
     : "Todo o período";
 
-  // 2. Monta o System Prompt estritamente fechado nos dados do banco
+  // 2. Monta o System Prompt estritamente fechado nos dados do banco + formato humano sem markdown cru
   const systemInstruction = `Você é o Analista de Dados Interno da Prefeitura Municipal de Belmonte (Bahia).
 
 REGRAS OBRIGATÓRIAS E INEGOCIÁVEIS:
 1. Responda EXCLUSIVAMENTE com base nos registros do banco de dados fornecidos abaixo dentro de <BANCO_DE_DADOS>.
-2. É ESTRITAMENTE PROIBIDO usar conhecimento externo, pesquisar na internet, supor fatos, ou inventar números, datas ou eventos que não estejam explicitamente nos registros abaixo.
-3. Se a pergunta pedir informações que não existem nos registros fornecidos, responda de forma clara: "Não foram encontrados registros no banco de dados atual com essa informação para o filtro selecionado."
-4. Ao fazer contagens (ex.: quantos eventos mencionam odontologia, atendimento médico, etc.), conte com precisão cirúrgica verificando os campos "titulo", "resumo" e "relatorioCompleto" de CADA registro e liste os eventos correspondentes citando **título**, **data** e **secretaria**.
-5. Responda sempre em português brasileiro claro, direto, organizado em tópicos ou tabela markdown quando apropriado.
+2. É ESTRITAMENTE PROIBIDO usar conhecimento externo, pesquisar na internet, supor fatos ou inventar números, datas ou eventos.
+3. Se a informação solicitada não existir nos registros fornecidos, diga claramente: "Não foram encontrados registros no banco de dados atual com essa informação para o filtro selecionado."
+4. ESTILO DE ESCRITA HUMANA:
+   - Escreva em português brasileiro natural, claro, cordial e direto, como um assessor respondendo pessoalmente ao gestor.
+   - NUNCA use asteriscos (* ou **), cerquilhas (# ou ###), chaves ({}), crases, traços de separação (---) ou qualquer formatação Markdown.
+   - Para relatórios gerais, contagens ou resumos (ex.: quantos atendimentos médicos, odontológicos ou pediátricos houve no período), escreva em texto corrido bem organizado em parágrafos curtos e fáceis de ler.
+   - Quando listar vários itens no texto, use apenas frases naturais ou numeração simples (1., 2., 3.) sem símbolos técnicos.
+5. LINKS INTERNOS DO SISTEMA:
+   - Sempre inclua no campo "eventosRelacionadosIds" os IDs exatos (campo "id" do banco) de todos os eventos mencionados ou encontrados na sua resposta, para que o sistema exiba links clicáveis diretos para cada um deles.
+   - Se nenhum evento específico corresponder, retorne "eventosRelacionadosIds": [].
+
+FORMATO OBRIGATÓRIO DA RESPOSTA (JSON válido):
+{
+  "resposta": "Texto humano limpo, sem asteriscos, sem markdown e sem símbolos técnicos.",
+  "eventosRelacionadosIds": ["id_do_evento_1", "id_do_evento_2"]
+}
 
 ESCOPO ATUAL DA CONSULTA:
 - Secretaria: ${escopoSecretaria}
@@ -176,12 +188,29 @@ ${JSON.stringify(registrosEstruturados)}
       temperature: 0.1,
       topP: 0.8,
       maxOutputTokens: 2048,
+      responseMimeType: "application/json",
     },
   });
 
+  function limparTextoHumano(raw: string): string {
+    return raw
+      .replace(/^#{1,6}\s*/gm, "")
+      .replace(/\*\*(.*?)\*\*/g, "$1")
+      .replace(/\*(.*?)\*/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/^\s*[-*_]{3,}\s*$/gm, "")
+      .replace(/^\s*\*\s+/gm, "• ")
+      .replace(/[{}]/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  const registrosById = new Map(registrosEstruturados.map((r) => [r.id, r]));
+
   try {
     let lastStatus = 502;
-    let lastErrorMsg = "Os modelos do Google Gemini estão com alta demanda no momento. Tente novamente em instantes.";
+    let lastErrorMsg =
+      "Os modelos do Google Gemini estão com alta demanda no momento. Tente novamente em instantes.";
 
     for (const modelName of FALLBACK_MODELS) {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
@@ -203,15 +232,49 @@ ${JSON.stringify(registrosEstruturados)}
       };
 
       if (geminiRes.ok) {
-        const resposta =
+        const rawText =
           data.candidates?.[0]?.content?.parts
             ?.map((p) => p.text || "")
             .join("")
-            .trim() ||
-          "Não foi possível gerar uma resposta a partir dos registros do banco.";
+            .trim() || "";
+
+        let respostaLimpa = "";
+        let idsRelacionados: string[] = [];
+
+        try {
+          const parsedJson = JSON.parse(rawText) as {
+            resposta?: string;
+            eventosRelacionadosIds?: string[];
+          };
+          respostaLimpa = limparTextoHumano(parsedJson.resposta || "");
+          if (Array.isArray(parsedJson.eventosRelacionadosIds)) {
+            idsRelacionados = parsedJson.eventosRelacionadosIds;
+          }
+        } catch {
+          respostaLimpa = limparTextoHumano(rawText);
+        }
+
+        if (!respostaLimpa) {
+          respostaLimpa =
+            "Não foi possível gerar uma resposta a partir dos registros do banco.";
+        }
+
+        // Resolve apenas IDs reais existentes no escopo consultado (links 100% válidos)
+        const eventosRelacionados = Array.from(new Set(idsRelacionados))
+          .map((id) => registrosById.get(id))
+          .filter((r): r is NonNullable<typeof r> => Boolean(r))
+          .map((r) => ({
+            id: r.id,
+            titulo: r.titulo,
+            data: r.data,
+            secretaria: r.secretaria,
+            local: r.local,
+            situacao: r.situacao,
+          }));
 
         return NextResponse.json({
-          resposta,
+          resposta: respostaLimpa,
+          eventosRelacionados,
           meta: {
             registrosAnalisados: registrosEstruturados.length,
             escopoSecretaria,
