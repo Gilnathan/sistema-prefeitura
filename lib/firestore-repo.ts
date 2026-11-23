@@ -817,7 +817,13 @@ export async function deleteLoginSlideDoc(id: string): Promise<boolean> {
 // ============================================================================
 
 const GEMINI_CONFIG_DOC_ID = "gemini_config";
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+
+const DEPRECATED_GEMINI_MODELS = new Set([
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-2.0-flash",
+]);
 
 export async function getGeminiConfig(): Promise<GeminiConfigDoc | null> {
   const db = getDb();
@@ -829,9 +835,13 @@ export async function getGeminiConfig(): Promise<GeminiConfigDoc | null> {
   if (snap.exists) {
     const data = snap.data() as Partial<GeminiConfigDoc>;
     if (data.apiKey) {
+      const resolvedModel =
+        !data.model || DEPRECATED_GEMINI_MODELS.has(data.model)
+          ? DEFAULT_GEMINI_MODEL
+          : data.model;
       return {
         apiKey: data.apiKey,
-        model: data.model || DEFAULT_GEMINI_MODEL,
+        model: resolvedModel,
         updatedAt: data.updatedAt || nowIso(),
         updatedByEmail: data.updatedByEmail,
       };

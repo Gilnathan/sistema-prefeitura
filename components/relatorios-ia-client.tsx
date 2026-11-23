@@ -149,7 +149,7 @@ export function RelatoriosIAClient({
       setConfig({
         configured: false,
         maskedKey: null,
-        model: "gemini-2.5-flash",
+        model: "gemini-3.8-flash",
         updatedAt: null,
         updatedByEmail: null,
       });
@@ -368,14 +368,14 @@ export function RelatoriosIAClient({
                     value={modelInput}
                     onChange={(e) => setModelInput(e.target.value)}
                   >
-                    <option value="gemini-2.5-flash">
-                      Gemini 2.5 Flash (Recomendado — rápido e econômico)
+                    <option value="gemini-3.8-flash">
+                      Gemini 3.8 Flash (Recomendado — mais recente e rápido)
                     </option>
-                    <option value="gemini-2.5-pro">
-                      Gemini 2.5 Pro (Análises mais profundas)
+                    <option value="gemini-3.7-flash">
+                      Gemini 3.7 Flash
                     </option>
-                    <option value="gemini-2.0-flash">
-                      Gemini 2.0 Flash
+                    <option value="gemini-3.6-flash">
+                      Gemini 3.6 Flash
                     </option>
                   </select>
                 </div>
