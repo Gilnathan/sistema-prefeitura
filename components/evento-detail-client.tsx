@@ -3,7 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { EventoLogDoc, EventoStatus, EventoTipo } from "@/lib/types";
+import type {
+  EventoLogDoc,
+  EventoStatus,
+  EventoTipo,
+  PublicoModo,
+  TurnoAcao,
+} from "@/lib/types";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -17,6 +23,7 @@ import {
   FileText,
   Film,
   Handshake,
+  HeartPulse,
   History,
   Image as ImageIcon,
   Loader2,
@@ -26,6 +33,7 @@ import {
   Trash2,
   UploadCloud,
   User,
+  Users,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,16 +57,24 @@ import {
 } from "@/components/ui/dialog";
 import { MediaGallery, type InitialMidiasData } from "@/components/media-gallery";
 import { ResumableUploader } from "@/components/resumable-uploader";
+import { AcaoDetalhesExtrasFields } from "@/components/acao-detalhes-extras-fields";
 import {
   formatarDataBR,
   formatarDataHoraBR,
   formatarDataISO,
   normalizarStatusEvento,
 } from "@/lib/utils";
+import {
+  formatarPeriodoAcao,
+  formatarPublicoAtendido,
+  formatarTurnos,
+  isSecretariaSaude,
+} from "@/lib/acao-options";
 
 interface EventoDetailClientProps {
   isAdmin: boolean;
   isParceira: boolean;
+  permitirEnvioVideos: boolean;
   todasSecretarias: { id: string; nome: string }[];
   initialMidias?: InitialMidiasData;
   evento: {
@@ -66,6 +82,12 @@ interface EventoDetailClientProps {
     titulo: string;
     tipo: EventoTipo;
     dataRealizacao: string;
+    dataFim?: string | null;
+    turnos?: TurnoAcao[];
+    publicoModo?: PublicoModo;
+    publicoExato?: number | null;
+    publicoEstimativa?: string | null;
+    servicosSaude?: string[];
     local: string;
     resumo: string;
     relatorioCompleto: string;
@@ -104,6 +126,7 @@ const LOG_BADGE: Record<
 export function EventoDetailClient({
   isAdmin,
   isParceira,
+  permitirEnvioVideos,
   todasSecretarias,
   initialMidias,
   evento: initialEvento,
@@ -144,6 +167,27 @@ export function EventoDetailClient({
   const [editData, setEditData] = useState(
     formatarDataISO(initialEvento.dataRealizacao)
   );
+  const [editMaisDeUmDia, setEditMaisDeUmDia] = useState(
+    Boolean(initialEvento.dataFim)
+  );
+  const [editDataFim, setEditDataFim] = useState(
+    initialEvento.dataFim ? formatarDataISO(initialEvento.dataFim) : ""
+  );
+  const [editTurnos, setEditTurnos] = useState<TurnoAcao[]>(
+    initialEvento.turnos || []
+  );
+  const [editPublicoModo, setEditPublicoModo] = useState<PublicoModo>(
+    initialEvento.publicoModo || "NAO_INFORMADO"
+  );
+  const [editPublicoExato, setEditPublicoExato] = useState(
+    initialEvento.publicoExato ? String(initialEvento.publicoExato) : ""
+  );
+  const [editPublicoEstimativa, setEditPublicoEstimativa] = useState(
+    initialEvento.publicoEstimativa || ""
+  );
+  const [editServicosSaude, setEditServicosSaude] = useState<string[]>(
+    initialEvento.servicosSaude || []
+  );
   const [editLocal, setEditLocal] = useState(initialEvento.local);
   const [editResumo, setEditResumo] = useState(initialEvento.resumo);
   const [editRelatorio, setEditRelatorio] = useState(
@@ -160,6 +204,11 @@ export function EventoDetailClient({
     normalizarStatusEvento(initialEvento.status) === "CANCELADA"
   );
 
+  const isEventoSaude = isSecretariaSaude(
+    evento.secretaria.nome,
+    evento.secretaria.sigla
+  );
+
   // Modal discreto de Registros (Auditoria)
   const [logsOpen, setLogsOpen] = useState(false);
   const [loadingLogs, setLoadingLogs] = useState(false);
@@ -174,6 +223,13 @@ export function EventoDetailClient({
   function openEditModal() {
     setEditTitulo(evento.titulo);
     setEditData(formatarDataISO(evento.dataRealizacao));
+    setEditMaisDeUmDia(Boolean(evento.dataFim));
+    setEditDataFim(evento.dataFim ? formatarDataISO(evento.dataFim) : "");
+    setEditTurnos(evento.turnos || []);
+    setEditPublicoModo(evento.publicoModo || "NAO_INFORMADO");
+    setEditPublicoExato(evento.publicoExato ? String(evento.publicoExato) : "");
+    setEditPublicoEstimativa(evento.publicoEstimativa || "");
+    setEditServicosSaude(evento.servicosSaude || []);
     setEditLocal(evento.local);
     setEditResumo(evento.resumo);
     setEditRelatorio(evento.relatorioCompleto);
@@ -201,6 +257,17 @@ export function EventoDetailClient({
 
   async function handleSaveEdit(e: React.FormEvent) {
     e.preventDefault();
+    if (editMaisDeUmDia && editDataFim && editDataFim < editData) {
+      toast.error("A data de término não pode ser anterior à data de início.");
+      return;
+    }
+    if (editPublicoModo === "EXATO") {
+      const n = Number(editPublicoExato);
+      if (!Number.isInteger(n) || n < 1) {
+        toast.error("Informe um número exato válido de pessoas atendidas.");
+        return;
+      }
+    }
     setSavingEdit(true);
     try {
       const res = await fetch(`/api/eventos/${evento.id}`, {
@@ -209,6 +276,18 @@ export function EventoDetailClient({
         body: JSON.stringify({
           titulo: editTitulo.trim(),
           dataRealizacao: editData,
+          dataFim: editMaisDeUmDia && editDataFim ? editDataFim : null,
+          turnos: editTurnos,
+          publicoModo: editPublicoModo,
+          publicoExato:
+            editPublicoModo === "EXATO" && editPublicoExato
+              ? Number(editPublicoExato)
+              : null,
+          publicoEstimativa:
+            editPublicoModo === "ESTIMATIVA"
+              ? editPublicoEstimativa.trim() || null
+              : null,
+          servicosSaude: isEventoSaude ? editServicosSaude : [],
           local: editLocal.trim(),
           resumo: editResumo.trim(),
           relatorioCompleto: editRelatorio.trim(),
@@ -233,6 +312,12 @@ export function EventoDetailClient({
         ...prev,
         titulo: data.evento.titulo,
         dataRealizacao: data.evento.dataRealizacao,
+        dataFim: data.evento.dataFim ?? null,
+        turnos: data.evento.turnos ?? [],
+        publicoModo: data.evento.publicoModo ?? "NAO_INFORMADO",
+        publicoExato: data.evento.publicoExato ?? null,
+        publicoEstimativa: data.evento.publicoEstimativa ?? null,
+        servicosSaude: data.evento.servicosSaude ?? [],
         local: data.evento.local,
         resumo: data.evento.resumo,
         relatorioCompleto: data.evento.relatorioCompleto,
@@ -279,14 +364,21 @@ export function EventoDetailClient({
       ...evento.orgaosParceirosExternos,
     ];
 
+    const turnosStr = formatarTurnos(evento.turnos);
+    const publicoStr = formatarPublicoAtendido(evento);
+    const servicosStr = (evento.servicosSaude || []).join(", ");
+
     const textoFormatado = [
       `AÇÃO: ${evento.titulo}`,
       `SECRETARIA: ${evento.secretaria.nome}`,
       ...(parceirosLista.length > 0
         ? [`PARCERIA: ${parceirosLista.join(", ")}`]
         : []),
-      `DATA: ${formatarDataBR(evento.dataRealizacao)}`,
+      `DATA: ${formatarPeriodoAcao(evento.dataRealizacao, evento.dataFim)}`,
+      ...(turnosStr ? [`TURNO: ${turnosStr}`] : []),
       `LOCAL: ${evento.local}`,
+      ...(publicoStr ? [`PESSOAS ATENDIDAS: ${publicoStr}`] : []),
+      ...(servicosStr ? [`ATENDIMENTOS / ESPECIALIDADES: ${servicosStr}`] : []),
       "",
       "RESUMO:",
       evento.resumo,
@@ -356,13 +448,43 @@ export function EventoDetailClient({
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
               <Calendar className="h-4 w-4 text-primary" />
-              {formatarDataBR(evento.dataRealizacao)}
+              {formatarPeriodoAcao(evento.dataRealizacao, evento.dataFim)}
             </span>
+            {evento.turnos && evento.turnos.length > 0 && (
+              <span className="inline-flex items-center gap-1.5">
+                <Clock className="h-4 w-4 text-primary" />
+                {formatarTurnos(evento.turnos)}
+              </span>
+            )}
             <span className="inline-flex items-center gap-1.5">
               <MapPin className="h-4 w-4 text-primary" />
               {evento.local}
             </span>
+            {formatarPublicoAtendido(evento) &&
+              evento.publicoModo !== "NAO_INFORMADO" && (
+                <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                  <Users className="h-4 w-4 text-[#128C23]" />
+                  {formatarPublicoAtendido(evento)}
+                </span>
+              )}
           </div>
+
+          {evento.servicosSaude && evento.servicosSaude.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs">
+              <span className="inline-flex items-center gap-1 font-medium text-emerald-900">
+                <HeartPulse className="h-3.5 w-3.5 text-[#128C23]" />
+                Atendimentos:
+              </span>
+              {evento.servicosSaude.map((servico) => (
+                <span
+                  key={servico}
+                  className="rounded-full bg-emerald-50 text-emerald-900 border border-emerald-200 px-2.5 py-0.5 font-medium"
+                >
+                  {servico}
+                </span>
+              ))}
+            </div>
+          )}
 
           {(evento.secretariasParceiras.length > 0 ||
             evento.orgaosParceirosExternos.length > 0) && (
@@ -486,15 +608,20 @@ export function EventoDetailClient({
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <UploadCloud className="h-5 w-5 text-primary" />
-            Adicionar mais Fotos ou Vídeos
+            {permitirEnvioVideos
+              ? "Adicionar mais Fotos ou Vídeos"
+              : "Adicionar mais Fotos"}
           </CardTitle>
           <CardDescription>
-            Novos arquivos serão salvos automaticamente na pasta desta ação e registrados no histórico com sua assinatura.
+            {permitirEnvioVideos
+              ? "Novos arquivos serão salvos automaticamente na pasta desta ação e registrados no histórico com sua assinatura."
+              : "Novas fotos serão salvas automaticamente na pasta desta ação e registradas no histórico com sua assinatura."}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ResumableUploader
             eventoId={evento.id}
+            allowVideos={permitirEnvioVideos}
             onUploadComplete={() => setGalleryRefresh((n) => n + 1)}
           />
         </CardContent>
@@ -567,15 +694,61 @@ export function EventoDetailClient({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="edit-data">Data de Realização *</Label>
+                <Label htmlFor="edit-data">
+                  {editMaisDeUmDia ? "Data de Início *" : "Data de Realização *"}
+                </Label>
                 <Input
                   id="edit-data"
                   type="date"
                   value={editData}
-                  onChange={(e) => setEditData(e.target.value)}
+                  onChange={(e) => {
+                    setEditData(e.target.value);
+                    if (editDataFim && e.target.value > editDataFim) {
+                      setEditDataFim(e.target.value);
+                    }
+                  }}
                   required
                 />
+                <label className="inline-flex items-center gap-2 pt-0.5 text-xs text-muted-foreground cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded accent-[#128C23]"
+                    checked={editMaisDeUmDia}
+                    onChange={(e) => {
+                      setEditMaisDeUmDia(e.target.checked);
+                      if (!e.target.checked) setEditDataFim("");
+                      else if (!editDataFim) setEditDataFim(editData);
+                    }}
+                  />
+                  Mais de um dia
+                </label>
               </div>
+              {editMaisDeUmDia ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-data-fim">Data de Término *</Label>
+                  <Input
+                    id="edit-data-fim"
+                    type="date"
+                    min={editData}
+                    value={editDataFim}
+                    onChange={(e) => setEditDataFim(e.target.value)}
+                    required
+                  />
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-local">Local *</Label>
+                  <Input
+                    id="edit-local"
+                    value={editLocal}
+                    onChange={(e) => setEditLocal(e.target.value)}
+                    required
+                  />
+                </div>
+              )}
+            </div>
+
+            {editMaisDeUmDia && (
               <div className="space-y-1.5">
                 <Label htmlFor="edit-local">Local *</Label>
                 <Input
@@ -585,7 +758,22 @@ export function EventoDetailClient({
                   required
                 />
               </div>
-            </div>
+            )}
+
+            <AcaoDetalhesExtrasFields
+              compact
+              isSaude={isEventoSaude}
+              turnos={editTurnos}
+              onTurnosChange={setEditTurnos}
+              publicoModo={editPublicoModo}
+              onPublicoModoChange={setEditPublicoModo}
+              publicoExato={editPublicoExato}
+              onPublicoExatoChange={setEditPublicoExato}
+              publicoEstimativa={editPublicoEstimativa}
+              onPublicoEstimativaChange={setEditPublicoEstimativa}
+              servicosSaude={editServicosSaude}
+              onServicosSaudeChange={setEditServicosSaude}
+            />
 
             <div className="space-y-1.5">
               <Label htmlFor="edit-resumo">Resumo *</Label>

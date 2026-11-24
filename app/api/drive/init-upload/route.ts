@@ -4,6 +4,7 @@ import {
   canUserAccessEvento,
   getEventoById,
   getSecretariaById,
+  getSystemSettings,
   updateEventoDoc,
   updateSecretariaDoc,
 } from "@/lib/firestore-repo";
@@ -14,6 +15,7 @@ import {
   ensureSecretariaFolder,
   isGoogleDriveConfigured,
 } from "@/lib/googleDrive";
+import { inferirTipoMidia } from "@/lib/utils";
 
 /**
  * POST /api/drive/init-upload
@@ -47,6 +49,17 @@ export async function POST(req: Request) {
   }
 
   const { eventoId, fileName, mimeType, fileSize } = parsed.data;
+
+  const settings = await getSystemSettings();
+  if (!settings.permitirEnvioVideos && inferirTipoMidia(mimeType, fileName) === "VIDEO") {
+    return NextResponse.json(
+      {
+        error:
+          "O envio de vídeos está temporariamente desabilitado nas configurações do sistema. Envie apenas fotos.",
+      },
+      { status: 403 }
+    );
+  }
 
   const evento = await getEventoById(eventoId);
   if (!evento) {

@@ -4,6 +4,7 @@ import {
   createEventoDoc,
   createEventoLog,
   getSecretariaById,
+  getSystemSettings,
   listSecretarias,
   updateSecretariaDoc,
 } from "@/lib/firestore-repo";
@@ -57,12 +58,29 @@ export async function POST(req: Request) {
     titulo,
     tipo = "REALIZADA",
     dataRealizacao,
+    dataFim,
+    turnos = [],
+    publicoModo = "NAO_INFORMADO",
+    publicoExato = null,
+    publicoEstimativa = null,
+    servicosSaude = [],
     local,
     resumo,
     relatorioCompleto = "",
     secretariasParceirasIds = [],
     orgaosParceirosExternos = [],
   } = parsed.data;
+
+  const settings = await getSystemSettings();
+  if (tipo === "FUTURA" && !settings.permitirAcoesFuturas) {
+    return NextResponse.json(
+      {
+        error:
+          "O cadastro de ações futuras está desabilitado nas configurações do sistema.",
+      },
+      { status: 400 }
+    );
+  }
 
   const secretariaId =
     session.user.role === "SECRETARIA"
@@ -89,6 +107,23 @@ export async function POST(req: Request) {
   );
   if (Number.isNaN(dataObj.getTime())) {
     return NextResponse.json({ error: "Data de realização inválida." }, { status: 400 });
+  }
+
+  let dataFimISO: string | null = null;
+  if (dataFim && dataFim.trim()) {
+    const fimObj = new Date(
+      dataFim.includes("T") ? dataFim : `${dataFim}T12:00:00.000Z`
+    );
+    if (Number.isNaN(fimObj.getTime())) {
+      return NextResponse.json({ error: "Data de término inválida." }, { status: 400 });
+    }
+    if (fimObj.getTime() < dataObj.getTime()) {
+      return NextResponse.json(
+        { error: "A data de término não pode ser anterior à data de início." },
+        { status: 400 }
+      );
+    }
+    dataFimISO = fimObj.toISOString();
   }
 
   let eventoDriveFolderId: string | null = null;
@@ -127,10 +162,22 @@ export async function POST(req: Request) {
     new Set(orgaosParceirosExternos.map((o) => o.trim()).filter(Boolean))
   );
 
+  const cleanTurnos = Array.from(new Set(turnos));
+  const cleanServicosSaude = Array.from(
+    new Set(servicosSaude.map((s) => s.trim()).filter(Boolean))
+  );
+
   const evento = await createEventoDoc({
     titulo,
     tipo,
     dataRealizacao: dataObj.toISOString(),
+    dataFim: dataFimISO,
+    turnos: cleanTurnos,
+    publicoModo,
+    publicoExato: publicoModo === "EXATO" ? publicoExato : null,
+    publicoEstimativa:
+      publicoModo === "ESTIMATIVA" ? publicoEstimativa?.trim() || null : null,
+    servicosSaude: cleanServicosSaude,
     local,
     resumo,
     relatorioCompleto,

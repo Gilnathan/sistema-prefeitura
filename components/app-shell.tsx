@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Settings,
   Users,
   Landmark,
   X,
@@ -74,6 +75,12 @@ export function AppShell({ user, children }: AppShellProps) {
       href: "/admin/fotos-login",
       label: "Fotos do Login",
       icon: Images,
+      roles: ["ADMIN"],
+    },
+    {
+      href: "/admin/configuracoes",
+      label: "Configurações",
+      icon: Settings,
       roles: ["ADMIN"],
     },
   ].filter((item) => item.roles.includes(user.role));

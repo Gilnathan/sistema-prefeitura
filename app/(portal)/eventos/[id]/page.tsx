@@ -4,6 +4,7 @@ import {
   canUserAccessEvento,
   getEventoById,
   getSecretariaById,
+  getSystemSettings,
   getUserById,
   listMidiasByEvento,
   listSecretarias,
@@ -31,12 +32,14 @@ export default async function EventoDetailPage({
     redirect("/dashboard");
   }
 
-  const [secretaria, criadoPor, todasSecretarias, todasMidias] = await Promise.all([
-    getSecretariaById(evento.secretariaId),
-    getUserById(evento.criadoPorId),
-    listSecretarias({ onlyActive: true }),
-    listMidiasByEvento(evento.id),
-  ]);
+  const [secretaria, criadoPor, todasSecretarias, todasMidias, settings] =
+    await Promise.all([
+      getSecretariaById(evento.secretariaId),
+      getUserById(evento.criadoPorId),
+      listSecretarias({ onlyActive: true }),
+      listMidiasByEvento(evento.id),
+      getSystemSettings(),
+    ]);
 
   const initialMidias = {
     items: todasMidias.slice(0, 12),
@@ -65,6 +68,7 @@ export default async function EventoDetailPage({
     <EventoDetailClient
       isAdmin={session.user.role === "ADMIN"}
       isParceira={isParceira}
+      permitirEnvioVideos={settings.permitirEnvioVideos}
       todasSecretarias={todasSecretarias.map((s) => ({ id: s.id, nome: s.nome }))}
       initialMidias={initialMidias}
       evento={{
@@ -72,6 +76,12 @@ export default async function EventoDetailPage({
         titulo: evento.titulo,
         tipo: resolverTipoEventoEfetivo(evento.tipo, evento.dataRealizacao),
         dataRealizacao: evento.dataRealizacao,
+        dataFim: evento.dataFim ?? null,
+        turnos: evento.turnos ?? [],
+        publicoModo: evento.publicoModo ?? "NAO_INFORMADO",
+        publicoExato: evento.publicoExato ?? null,
+        publicoEstimativa: evento.publicoEstimativa ?? null,
+        servicosSaude: evento.servicosSaude ?? [],
         local: evento.local,
         resumo: evento.resumo,
         relatorioCompleto: evento.relatorioCompleto,

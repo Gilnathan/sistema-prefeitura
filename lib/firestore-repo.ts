@@ -10,8 +10,11 @@ import type {
   LoginSlideDoc,
   MidiaDoc,
   MidiaTipo,
+  PublicoModo,
   Role,
   SecretariaDoc,
+  SystemSettingsDoc,
+  TurnoAcao,
   UserDoc,
 } from "@/lib/types";
 
@@ -28,6 +31,7 @@ const CACHE_TTL_MS = 60_000;
 const globalCache = globalThis as unknown as {
   __belmonteSecretariasCache?: { data: SecretariaDoc[]; expiresAt: number };
   __belmonteUsersCache?: { data: UserDoc[]; expiresAt: number };
+  __belmonteSystemSettingsCache?: { data: SystemSettingsDoc; expiresAt: number };
 };
 
 export function invalidateSecretariasCache() {
@@ -36,6 +40,10 @@ export function invalidateSecretariasCache() {
 
 export function invalidateUsersCache() {
   globalCache.__belmonteUsersCache = undefined;
+}
+
+export function invalidateSystemSettingsCache() {
+  globalCache.__belmonteSystemSettingsCache = undefined;
 }
 
 // ============================================================================
@@ -471,6 +479,12 @@ export async function createEventoDoc(data: {
   titulo: string;
   tipo?: EventoTipo;
   dataRealizacao: string;
+  dataFim?: string | null;
+  turnos?: TurnoAcao[];
+  publicoModo?: PublicoModo;
+  publicoExato?: number | null;
+  publicoEstimativa?: string | null;
+  servicosSaude?: string[];
   local: string;
   resumo: string;
   relatorioCompleto: string;
@@ -490,6 +504,12 @@ export async function createEventoDoc(data: {
     titulo: data.titulo.trim(),
     tipo: data.tipo ?? "REALIZADA",
     dataRealizacao: data.dataRealizacao,
+    dataFim: data.dataFim ?? null,
+    turnos: data.turnos ?? [],
+    publicoModo: data.publicoModo ?? "NAO_INFORMADO",
+    publicoExato: data.publicoExato ?? null,
+    publicoEstimativa: data.publicoEstimativa ?? null,
+    servicosSaude: data.servicosSaude ?? [],
     local: data.local.trim(),
     resumo: data.resumo.trim(),
     relatorioCompleto: data.relatorioCompleto.trim(),
@@ -518,6 +538,12 @@ export async function updateEventoDoc(
     titulo: string;
     tipo: EventoTipo;
     dataRealizacao: string;
+    dataFim: string | null;
+    turnos: TurnoAcao[];
+    publicoModo: PublicoModo;
+    publicoExato: number | null;
+    publicoEstimativa: string | null;
+    servicosSaude: string[];
     local: string;
     resumo: string;
     relatorioCompleto: string;
@@ -541,6 +567,16 @@ export async function updateEventoDoc(
   if (patch.tipo !== undefined) updates.tipo = patch.tipo;
   if (patch.dataRealizacao !== undefined) {
     updates.dataRealizacao = patch.dataRealizacao;
+  }
+  if (patch.dataFim !== undefined) updates.dataFim = patch.dataFim;
+  if (patch.turnos !== undefined) updates.turnos = patch.turnos;
+  if (patch.publicoModo !== undefined) updates.publicoModo = patch.publicoModo;
+  if (patch.publicoExato !== undefined) updates.publicoExato = patch.publicoExato;
+  if (patch.publicoEstimativa !== undefined) {
+    updates.publicoEstimativa = patch.publicoEstimativa;
+  }
+  if (patch.servicosSaude !== undefined) {
+    updates.servicosSaude = patch.servicosSaude;
   }
   if (patch.local !== undefined) updates.local = patch.local.trim();
   if (patch.resumo !== undefined) updates.resumo = patch.resumo.trim();
@@ -885,4 +921,71 @@ export async function deleteGeminiConfig(): Promise<void> {
     .collection(COLLECTIONS.APP_SETTINGS)
     .doc(GEMINI_CONFIG_DOC_ID)
     .delete();
+}
+
+// ============================================================================
+// CONFIGURAÇÕES GLOBAIS DO SISTEMA (FEATURE FLAGS — ADMIN)
+// ============================================================================
+
+const SYSTEM_SETTINGS_DOC_ID = "system_config";
+
+export const DEFAULT_SYSTEM_SETTINGS: SystemSettingsDoc = {
+  permitirAcoesFuturas: false,
+  permitirEnvioVideos: false,
+  updatedAt: "",
+};
+
+export async function getSystemSettings(): Promise<SystemSettingsDoc> {
+  if (
+    globalCache.__belmonteSystemSettingsCache &&
+    Date.now() < globalCache.__belmonteSystemSettingsCache.expiresAt
+  ) {
+    return globalCache.__belmonteSystemSettingsCache.data;
+  }
+
+  const db = getDb();
+  const snap = await db
+    .collection(COLLECTIONS.APP_SETTINGS)
+    .doc(SYSTEM_SETTINGS_DOC_ID)
+    .get();
+
+  const data = snap.exists ? (snap.data() as Partial<SystemSettingsDoc>) : {};
+  const resolved: SystemSettingsDoc = {
+    permitirAcoesFuturas: Boolean(data.permitirAcoesFuturas ?? false),
+    permitirEnvioVideos: Boolean(data.permitirEnvioVideos ?? false),
+    updatedAt: data.updatedAt || "",
+    updatedByEmail: data.updatedByEmail,
+  };
+
+  globalCache.__belmonteSystemSettingsCache = {
+    data: resolved,
+    expiresAt: Date.now() + 30_000,
+  };
+
+  return resolved;
+}
+
+export async function saveSystemSettings(patch: {
+  permitirAcoesFuturas?: boolean;
+  permitirEnvioVideos?: boolean;
+  updatedByEmail?: string;
+}): Promise<SystemSettingsDoc> {
+  const current = await getSystemSettings();
+  const next: SystemSettingsDoc = {
+    permitirAcoesFuturas:
+      patch.permitirAcoesFuturas ?? current.permitirAcoesFuturas,
+    permitirEnvioVideos:
+      patch.permitirEnvioVideos ?? current.permitirEnvioVideos,
+    updatedAt: nowIso(),
+    updatedByEmail: patch.updatedByEmail ?? current.updatedByEmail,
+  };
+
+  const db = getDb();
+  await db
+    .collection(COLLECTIONS.APP_SETTINGS)
+    .doc(SYSTEM_SETTINGS_DOC_ID)
+    .set(next, { merge: true });
+
+  invalidateSystemSettingsCache();
+  return next;
 }

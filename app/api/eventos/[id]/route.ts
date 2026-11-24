@@ -18,6 +18,10 @@ import {
   formatarDataBR,
   normalizarStatusEvento,
 } from "@/lib/utils";
+import {
+  formatarPublicoAtendido,
+  formatarTurnos,
+} from "@/lib/acao-options";
 
 export async function GET(
   _req: Request,
@@ -178,6 +182,104 @@ export async function PATCH(
           depois: formatarDataBR(novaDataISO),
         });
       }
+    }
+  }
+
+  if (parsed.data.dataFim !== undefined) {
+    let novaDataFimISO: string | null = null;
+    if (parsed.data.dataFim && parsed.data.dataFim.trim()) {
+      const df = new Date(
+        parsed.data.dataFim.includes("T")
+          ? parsed.data.dataFim
+          : `${parsed.data.dataFim}T12:00:00.000Z`
+      );
+      if (!Number.isNaN(df.getTime())) {
+        novaDataFimISO = df.toISOString();
+      }
+    }
+    const antesFim = existing.dataFim ? formatarDataBR(existing.dataFim) : "Ação de 1 dia";
+    const depoisFim = novaDataFimISO ? formatarDataBR(novaDataFimISO) : "Ação de 1 dia";
+    if (antesFim !== depoisFim) {
+      patch.dataFim = novaDataFimISO;
+      changes.push({
+        campo: "Data de Término",
+        antes: antesFim,
+        depois: depoisFim,
+      });
+    }
+  }
+
+  if (parsed.data.turnos !== undefined) {
+    const novosTurnos = Array.from(new Set(parsed.data.turnos));
+    const antigosTurnos = existing.turnos || [];
+    const mudou =
+      novosTurnos.length !== antigosTurnos.length ||
+      novosTurnos.some((t) => !antigosTurnos.includes(t));
+    if (mudou) {
+      patch.turnos = novosTurnos;
+      changes.push({
+        campo: "Turnos",
+        antes: formatarTurnos(antigosTurnos) || "Não informado",
+        depois: formatarTurnos(novosTurnos) || "Não informado",
+      });
+    }
+  }
+
+  if (
+    parsed.data.publicoModo !== undefined ||
+    parsed.data.publicoExato !== undefined ||
+    parsed.data.publicoEstimativa !== undefined
+  ) {
+    const novoModo = parsed.data.publicoModo ?? existing.publicoModo ?? "NAO_INFORMADO";
+    const novoExato =
+      novoModo === "EXATO"
+        ? parsed.data.publicoExato ?? existing.publicoExato ?? null
+        : null;
+    const novaEstimativa =
+      novoModo === "ESTIMATIVA"
+        ? (parsed.data.publicoEstimativa ?? existing.publicoEstimativa ?? "").trim() || null
+        : null;
+
+    const antesPublico =
+      formatarPublicoAtendido({
+        publicoModo: existing.publicoModo,
+        publicoExato: existing.publicoExato,
+        publicoEstimativa: existing.publicoEstimativa,
+      }) || "Não informado";
+    const depoisPublico =
+      formatarPublicoAtendido({
+        publicoModo: novoModo,
+        publicoExato: novoExato,
+        publicoEstimativa: novaEstimativa,
+      }) || "Não informado";
+
+    if (antesPublico !== depoisPublico || novoModo !== existing.publicoModo) {
+      patch.publicoModo = novoModo;
+      patch.publicoExato = novoExato;
+      patch.publicoEstimativa = novaEstimativa;
+      changes.push({
+        campo: "Pessoas Atendidas",
+        antes: antesPublico,
+        depois: depoisPublico,
+      });
+    }
+  }
+
+  if (parsed.data.servicosSaude !== undefined) {
+    const novosServicos = Array.from(
+      new Set(parsed.data.servicosSaude.map((s) => s.trim()).filter(Boolean))
+    );
+    const antigosServicos = existing.servicosSaude || [];
+    const mudou =
+      novosServicos.length !== antigosServicos.length ||
+      novosServicos.some((s) => !antigosServicos.includes(s));
+    if (mudou) {
+      patch.servicosSaude = novosServicos;
+      changes.push({
+        campo: "Atendimentos / Especialidades",
+        antes: antigosServicos.join(", ") || "Nenhum",
+        depois: novosServicos.join(", ") || "Nenhum",
+      });
     }
   }
 

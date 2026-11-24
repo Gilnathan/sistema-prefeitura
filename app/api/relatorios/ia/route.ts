@@ -13,6 +13,11 @@ import {
   normalizarStatusEvento,
   resolverTipoEventoEfetivo,
 } from "@/lib/utils";
+import {
+  formatarPeriodoAcao,
+  formatarPublicoAtendido,
+  formatarTurnos,
+} from "@/lib/acao-options";
 
 export const maxDuration = 30;
 
@@ -168,7 +173,11 @@ export async function POST(req: Request) {
         titulo: ev.titulo,
         secretaria: sec?.nome || "Secretaria",
         parceiros: parceirasNomes,
-        data: formatarDataBR(ev.dataRealizacao),
+        data: formatarPeriodoAcao(ev.dataRealizacao, ev.dataFim),
+        turnos: formatarTurnos(ev.turnos),
+        publico: formatarPublicoAtendido(ev),
+        publicoExato: ev.publicoModo === "EXATO" ? ev.publicoExato ?? 0 : 0,
+        servicosSaude: ev.servicosSaude || [],
         mesAno,
         local: ev.local,
         situacao: situacaoReal,
@@ -207,13 +216,17 @@ export async function POST(req: Request) {
   let totalRealizadas = 0;
   let totalFuturas = 0;
   let totalCanceladas = 0;
+  let somaPublicoExato = 0;
   const porSecretaria = new Map<string, { realizadas: number; futuras: number; canceladas: number }>();
   const porMes = new Map<string, number>();
+  const porServicoSaude = new Map<string, number>();
 
   for (const r of registros) {
     if (r.situacao === "REALIZADA") totalRealizadas++;
     else if (r.situacao === "FUTURA") totalFuturas++;
     else totalCanceladas++;
+
+    if (r.publicoExato > 0) somaPublicoExato += r.publicoExato;
 
     const s = porSecretaria.get(r.secretaria) ?? { realizadas: 0, futuras: 0, canceladas: 0 };
     if (r.situacao === "REALIZADA") s.realizadas++;
@@ -222,6 +235,10 @@ export async function POST(req: Request) {
     porSecretaria.set(r.secretaria, s);
 
     porMes.set(r.mesAno, (porMes.get(r.mesAno) ?? 0) + 1);
+
+    for (const serv of r.servicosSaude) {
+      porServicoSaude.set(serv, (porServicoSaude.get(serv) ?? 0) + 1);
+    }
   }
 
   const resumoEstatistico = [
@@ -234,6 +251,18 @@ export async function POST(req: Request) {
       Array.from(porMes.entries())
         .map(([m, qtd]) => `${m}: ${qtd}`)
         .join(" | "),
+    ...(somaPublicoExato > 0
+      ? [`Soma de público com número exato informado: ${somaPublicoExato.toLocaleString("pt-BR")} pessoas`]
+      : []),
+    ...(porServicoSaude.size > 0
+      ? [
+          "Atendimentos/Especialidades de Saúde marcados: " +
+            Array.from(porServicoSaude.entries())
+              .sort((a, b) => b[1] - a[1])
+              .map(([nome, qtd]) => `${nome}: ${qtd} ação(ões)`)
+              .join(" | "),
+        ]
+      : []),
   ].join("\n");
 
   // 3. Ranqueamento lexical local considerando a pergunta atual + contexto recente da conversa
@@ -249,7 +278,7 @@ export async function POST(req: Request) {
 
   const pontuados = registros.map((r) => {
     const corpus = normalizarTextoBusca(
-      `${r.titulo} ${r.secretaria} ${r.local} ${r.data} ${r.parceiros.join(" ")} ${r.resumo} ${r.relatorioCompleto}`
+      `${r.titulo} ${r.secretaria} ${r.local} ${r.data} ${r.turnos} ${r.publico} ${r.servicosSaude.join(" ")} ${r.parceiros.join(" ")} ${r.resumo} ${r.relatorioCompleto}`
     );
     let score = idsJaCitadosNoHistorico.has(r.id) ? 6 : 0;
     for (const termo of termos) {
@@ -283,10 +312,16 @@ export async function POST(req: Request) {
   const baseDetalhada = detalhados
     .map((r, idx) => {
       const linhas = [
-        `#${idx + 1} | ID: ${r.id} | Data: ${r.data} | Situação: ${r.situacao} | Secretaria: ${r.secretaria}`,
+        `#${idx + 1} | ID: ${r.id} | Data: ${r.data}${
+          r.turnos ? ` | Turno: ${r.turnos}` : ""
+        } | Situação: ${r.situacao} | Secretaria: ${r.secretaria}`,
         `Título: ${r.titulo} | Local: ${r.local}${
           r.parceiros.length > 0 ? ` | Parceiros: ${r.parceiros.join(", ")}` : ""
         }`,
+        ...(r.publico ? [`Pessoas atendidas: ${r.publico}`] : []),
+        ...(r.servicosSaude.length > 0
+          ? [`Atendimentos/Especialidades de Saúde: ${r.servicosSaude.join(", ")}`]
+          : []),
         `Resumo: ${r.resumo.slice(0, 450)}`,
       ];
       if (r.relatorioCompleto) {

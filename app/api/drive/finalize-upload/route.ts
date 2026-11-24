@@ -4,6 +4,7 @@ import {
   canUserAccessEvento,
   createEventoLog,
   getEventoById,
+  getSystemSettings,
   upsertMidiaDoc,
 } from "@/lib/firestore-repo";
 import { finalizeUploadSchema } from "@/lib/validations";
@@ -32,6 +33,17 @@ export async function POST(req: Request) {
   }
 
   const { eventoId, driveFileId, fileName, mimeType, fileSize } = parsed.data;
+
+  const settings = await getSystemSettings();
+  if (!settings.permitirEnvioVideos && inferirTipoMidia(mimeType, fileName) === "VIDEO") {
+    return NextResponse.json(
+      {
+        error:
+          "O envio de vídeos está desabilitado nas configurações do sistema.",
+      },
+      { status: 403 }
+    );
+  }
 
   const evento = await getEventoById(eventoId);
   if (!evento) {

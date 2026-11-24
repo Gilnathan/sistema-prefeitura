@@ -19,7 +19,9 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import type { EventoTipo } from "@/lib/types";
+import type { EventoTipo, PublicoModo, TurnoAcao } from "@/lib/types";
+import { isSecretariaSaude } from "@/lib/acao-options";
+import { AcaoDetalhesExtrasFields } from "@/components/acao-detalhes-extras-fields";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,7 +44,9 @@ interface NovoEventoFormProps {
   isAdmin: boolean;
   userSecretariaId: string | null;
   secretariaNome: string | null;
-  secretarias: { id: string; nome: string }[];
+  secretarias: { id: string; nome: string; sigla?: string | null }[];
+  permitirAcoesFuturas: boolean;
+  permitirEnvioVideos: boolean;
 }
 
 const TEMPLATE_RELATORIO = `1. OBJETIVO DA AÇÃO:
@@ -62,6 +66,8 @@ export function NovoEventoForm({
   userSecretariaId,
   secretariaNome,
   secretarias,
+  permitirAcoesFuturas,
+  permitirEnvioVideos,
 }: NovoEventoFormProps) {
   const router = useRouter();
   const hojeISO = new Date().toISOString().slice(0, 10);
@@ -69,6 +75,13 @@ export function NovoEventoForm({
   const [tipo, setTipo] = useState<EventoTipo>("REALIZADA");
   const [titulo, setTitulo] = useState("");
   const [dataRealizacao, setDataRealizacao] = useState(hojeISO);
+  const [maisDeUmDia, setMaisDeUmDia] = useState(false);
+  const [dataFim, setDataFim] = useState("");
+  const [turnos, setTurnos] = useState<TurnoAcao[]>([]);
+  const [publicoModo, setPublicoModo] = useState<PublicoModo>("NAO_INFORMADO");
+  const [publicoExato, setPublicoExato] = useState("");
+  const [publicoEstimativa, setPublicoEstimativa] = useState("");
+  const [servicosSaude, setServicosSaude] = useState<string[]>([]);
   const [local, setLocal] = useState("");
   const [secretariaId, setSecretariaId] = useState(secretarias[0]?.id ?? "");
   const [secretariasParceirasIds, setSecretariasParceirasIds] = useState<string[]>([]);
@@ -83,6 +96,12 @@ export function NovoEventoForm({
   const [activeTab, setActiveTab] = useState("dados");
 
   const secretariaPrincipalId = isAdmin ? secretariaId : userSecretariaId;
+  const secretariaAtivaObj = secretarias.find((s) => s.id === secretariaPrincipalId);
+  const isSaudeSelecionada = isSecretariaSaude(
+    secretariaAtivaObj?.nome ?? secretariaNome,
+    secretariaAtivaObj?.sigla
+  );
+  const tipoEfetivo: EventoTipo = permitirAcoesFuturas ? tipo : "REALIZADA";
   const secretariasDisponiveisParceiras = secretarias.filter(
     (s) => s.id !== secretariaPrincipalId
   );
@@ -115,12 +134,27 @@ export function NovoEventoForm({
       return;
     }
 
-    if (tipo === "REALIZADA" && relatorioCompleto.trim().length < 10) {
+    if (tipoEfetivo === "REALIZADA" && relatorioCompleto.trim().length < 10) {
       toast.error(
         "Preencha a aba 'Relatório Completo' com os detalhes da ação realizada."
       );
       setActiveTab("relatorio");
       return;
+    }
+
+    if (maisDeUmDia && dataFim && dataFim < dataRealizacao) {
+      toast.error("A data de término não pode ser anterior à data de início.");
+      setActiveTab("dados");
+      return;
+    }
+
+    if (publicoModo === "EXATO") {
+      const n = Number(publicoExato);
+      if (!Number.isInteger(n) || n < 1) {
+        toast.error("Informe um número exato válido de pessoas atendidas (ou escolha outra opção).");
+        setActiveTab("dados");
+        return;
+      }
     }
 
     if (isAdmin && !secretariaId) {
@@ -137,8 +171,16 @@ export function NovoEventoForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           titulo: titulo.trim(),
-          tipo,
+          tipo: tipoEfetivo,
           dataRealizacao,
+          dataFim: maisDeUmDia && dataFim ? dataFim : null,
+          turnos,
+          publicoModo,
+          publicoExato:
+            publicoModo === "EXATO" && publicoExato ? Number(publicoExato) : null,
+          publicoEstimativa:
+            publicoModo === "ESTIMATIVA" ? publicoEstimativa.trim() || null : null,
+          servicosSaude: isSaudeSelecionada ? servicosSaude : [],
           local: local.trim(),
           resumo: resumo.trim(),
           relatorioCompleto: relatorioCompleto.trim(),
@@ -271,71 +313,74 @@ export function NovoEventoForm({
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Seletor no topo: Ação Já Realizada vs Ação Futura / Agendada */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={() => setTipo("REALIZADA")}
-            className={`flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all ${
-              tipo === "REALIZADA"
-                ? "border-[#128C23] bg-emerald-50/70 shadow-sm"
-                : "border-border bg-card hover:border-emerald-300"
-            }`}
-          >
-            <div
-              className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+        {/* Seletor no topo: exibido apenas quando Ações Futuras está habilitado nas Configurações (ADMIN) */}
+        {permitirAcoesFuturas && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setTipo("REALIZADA")}
+              className={`flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all ${
                 tipo === "REALIZADA"
-                  ? "bg-[#128C23] text-white"
-                  : "bg-muted text-muted-foreground"
+                  ? "border-[#128C23] bg-emerald-50/70 shadow-sm"
+                  : "border-border bg-card hover:border-emerald-300"
               }`}
             >
-              <CheckCircle2 className="h-5 w-5" />
-            </div>
-            <div className="space-y-0.5">
-              <p className="text-sm font-semibold text-foreground">
-                Ação Já Realizada
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Registre uma ação que já aconteceu, com relatório completo e fotos/vídeos.
-              </p>
-            </div>
-          </button>
+              <div
+                className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                  tipo === "REALIZADA"
+                    ? "bg-[#128C23] text-white"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-sm font-semibold text-foreground">
+                  Ação Já Realizada
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Registre uma ação que já aconteceu, com relatório completo e{" "}
+                  {permitirEnvioVideos ? "fotos/vídeos" : "fotos"}.
+                </p>
+              </div>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setTipo("FUTURA")}
-            className={`flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all ${
-              tipo === "FUTURA"
-                ? "border-sky-500 bg-sky-50/80 shadow-sm"
-                : "border-border bg-card hover:border-sky-300"
-            }`}
-          >
-            <div
-              className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+            <button
+              type="button"
+              onClick={() => setTipo("FUTURA")}
+              className={`flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all ${
                 tipo === "FUTURA"
-                  ? "bg-sky-600 text-white"
-                  : "bg-muted text-muted-foreground"
+                  ? "border-sky-500 bg-sky-50/80 shadow-sm"
+                  : "border-border bg-card hover:border-sky-300"
               }`}
             >
-              <CalendarClock className="h-5 w-5" />
-            </div>
-            <div className="space-y-0.5">
-              <p className="text-sm font-semibold text-foreground">
-                Ação Futura (Ainda vai acontecer)
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Agende uma ação futura com destaque visual azul. Ao passar da data, muda automaticamente para realizada.
-              </p>
-            </div>
-          </button>
-        </div>
+              <div
+                className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                  tipo === "FUTURA"
+                    ? "bg-sky-600 text-white"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                <CalendarClock className="h-5 w-5" />
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-sm font-semibold text-foreground">
+                  Ação Futura (Ainda vai acontecer)
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Agende uma ação futura com destaque visual azul. Ao passar da data, muda automaticamente para realizada.
+                </p>
+              </div>
+            </button>
+          </div>
+        )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-3 h-auto p-1">
             <TabsTrigger value="dados" className="gap-1.5 py-2 text-xs sm:text-sm px-1.5 sm:px-3">
               <Calendar className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
               <span className="sm:hidden">1. Dados</span>
-              <span className="hidden sm:inline">1. Dados do Evento</span>
+              <span className="hidden sm:inline">1. Dados da Ação</span>
             </TabsTrigger>
             <TabsTrigger value="relatorio" className="gap-1.5 py-2 text-xs sm:text-sm px-1.5 sm:px-3">
               <FileText className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
@@ -344,8 +389,12 @@ export function NovoEventoForm({
             </TabsTrigger>
             <TabsTrigger value="midias" className="gap-1.5 py-2 text-xs sm:text-sm px-1.5 sm:px-3">
               <ImagePlus className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
-              <span className="sm:hidden">3. Mídias ({files.length})</span>
-              <span className="hidden sm:inline">3. Fotos e Vídeos ({files.length})</span>
+              <span className="sm:hidden">
+                3. {permitirEnvioVideos ? "Mídias" : "Fotos"} ({files.length})
+              </span>
+              <span className="hidden sm:inline">
+                3. {permitirEnvioVideos ? "Fotos e Vídeos" : "Fotos"} ({files.length})
+              </span>
             </TabsTrigger>
           </TabsList>
 
@@ -393,16 +442,66 @@ export function NovoEventoForm({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="dataRealizacao">
-                      {tipo === "FUTURA" ? "Data Prevista *" : "Data de Realização *"}
+                      {tipoEfetivo === "FUTURA"
+                        ? "Data Prevista *"
+                        : maisDeUmDia
+                        ? "Data de Início *"
+                        : "Data de Realização *"}
                     </Label>
                     <Input
                       id="dataRealizacao"
                       type="date"
                       value={dataRealizacao}
-                      onChange={(e) => setDataRealizacao(e.target.value)}
+                      onChange={(e) => {
+                        setDataRealizacao(e.target.value);
+                        if (dataFim && e.target.value > dataFim) {
+                          setDataFim(e.target.value);
+                        }
+                      }}
                       required
                     />
+                    <label className="inline-flex items-center gap-2 pt-0.5 text-xs text-muted-foreground cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded accent-[#128C23]"
+                        checked={maisDeUmDia}
+                        onChange={(e) => {
+                          setMaisDeUmDia(e.target.checked);
+                          if (!e.target.checked) setDataFim("");
+                          else if (!dataFim) setDataFim(dataRealizacao);
+                        }}
+                      />
+                      Esta ação durou mais de um dia
+                    </label>
                   </div>
+
+                  {maisDeUmDia ? (
+                    <div className="space-y-2 animate-fade-in">
+                      <Label htmlFor="dataFim">Data de Término *</Label>
+                      <Input
+                        id="dataFim"
+                        type="date"
+                        min={dataRealizacao}
+                        value={dataFim}
+                        onChange={(e) => setDataFim(e.target.value)}
+                        required
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Label htmlFor="local">Local *</Label>
+                      <Input
+                        id="local"
+                        placeholder="Ex: UBS Central, Escola Municipal, Praça..."
+                        value={local}
+                        onChange={(e) => setLocal(e.target.value)}
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {maisDeUmDia && (
                   <div className="space-y-2">
                     <Label htmlFor="local">Local *</Label>
                     <Input
@@ -413,7 +512,7 @@ export function NovoEventoForm({
                       required
                     />
                   </div>
-                </div>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="resumo">Resumo / O que aconteceu *</Label>
@@ -426,6 +525,21 @@ export function NovoEventoForm({
                     required
                   />
                 </div>
+
+                {/* Turnos, Pessoas Atendidas e Especialidades de Saúde (opcionais) */}
+                <AcaoDetalhesExtrasFields
+                  isSaude={isSaudeSelecionada}
+                  turnos={turnos}
+                  onTurnosChange={setTurnos}
+                  publicoModo={publicoModo}
+                  onPublicoModoChange={setPublicoModo}
+                  publicoExato={publicoExato}
+                  onPublicoExatoChange={setPublicoExato}
+                  publicoEstimativa={publicoEstimativa}
+                  onPublicoEstimativaChange={setPublicoEstimativa}
+                  servicosSaude={servicosSaude}
+                  onServicosSaudeChange={setServicosSaude}
+                />
 
                 {/* Secretarias ou Órgãos Parceiros (oculto por padrão; abre ao clicar) */}
                 <div className="rounded-xl border bg-muted/20 overflow-hidden">
@@ -585,7 +699,7 @@ export function NovoEventoForm({
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="relatorioCompleto">
-                    {tipo === "FUTURA"
+                    {tipoEfetivo === "FUTURA"
                       ? "Detalhes / Planejamento da Ação (opcional)"
                       : "Texto Detalhado do Relatório *"}
                   </Label>
@@ -593,14 +707,14 @@ export function NovoEventoForm({
                     id="relatorioCompleto"
                     rows={12}
                     placeholder={
-                      tipo === "FUTURA"
+                      tipoEfetivo === "FUTURA"
                         ? "Opcional: informe programação prevista, público esperado, necessidades de cobertura ou divulgação..."
                         : "Descreva os objetivos da ação, quantidade de pessoas atendidas, autoridades participantes, resultados alcançados..."
                     }
                     value={relatorioCompleto}
                     onChange={(e) => setRelatorioCompleto(e.target.value)}
                     className="leading-relaxed"
-                    required={tipo === "REALIZADA"}
+                    required={tipoEfetivo === "REALIZADA"}
                   />
                 </div>
 
@@ -617,7 +731,9 @@ export function NovoEventoForm({
                     variant="secondary"
                     onClick={() => setActiveTab("midias")}
                   >
-                    Avançar para Fotos e Vídeos
+                    {permitirEnvioVideos
+                      ? "Avançar para Fotos e Vídeos"
+                      : "Avançar para Fotos"}
                   </Button>
                 </div>
               </CardContent>
@@ -628,9 +744,15 @@ export function NovoEventoForm({
           <TabsContent value="midias">
             <Card>
               <CardHeader>
-                <CardTitle>Fotos e Vídeos do Evento</CardTitle>
+                <CardTitle>
+                  {permitirEnvioVideos
+                    ? "Fotos e Vídeos da Ação"
+                    : "Fotos da Ação"}
+                </CardTitle>
                 <CardDescription>
-                  Selecione todas as fotos e vídeos em alta qualidade. Os arquivos serão organizados automaticamente nos bastidores ao enviar.
+                  {permitirEnvioVideos
+                    ? "Selecione todas as fotos e vídeos em alta qualidade. Os arquivos serão organizados automaticamente nos bastidores ao enviar."
+                    : "Selecione as fotos em alta qualidade desta ação. Os arquivos serão organizados automaticamente nos bastidores ao enviar."}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -638,6 +760,7 @@ export function NovoEventoForm({
                   files={files}
                   onFilesChange={setFiles}
                   disabled={submitting}
+                  allowVideos={permitirEnvioVideos}
                 />
               </CardContent>
             </Card>

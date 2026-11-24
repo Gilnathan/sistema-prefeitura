@@ -230,6 +230,7 @@ interface ResumableUploaderProps {
   onFilesChange?: React.Dispatch<React.SetStateAction<QueuedFile[]>>;
   onUploadComplete?: () => void;
   disabled?: boolean;
+  allowVideos?: boolean;
 }
 
 export function ResumableUploader({
@@ -238,6 +239,7 @@ export function ResumableUploader({
   onFilesChange,
   onUploadComplete,
   disabled = false,
+  allowVideos = true,
 }: ResumableUploaderProps) {
   const [internalFiles, setInternalFiles] = useState<QueuedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -260,7 +262,24 @@ export function ResumableUploader({
     (selected: File[]) => {
       stopPreparing();
       if (!selected.length) return;
-      const novos: QueuedFile[] = selected.map((file) => ({
+
+      let validFiles = selected;
+      if (!allowVideos) {
+        const blocked = selected.filter((f) =>
+          inferirMimeType(f.name, f.type).startsWith("video/")
+        );
+        validFiles = selected.filter(
+          (f) => !inferirMimeType(f.name, f.type).startsWith("video/")
+        );
+        if (blocked.length > 0) {
+          toast.error(
+            "O envio de vídeos está desabilitado no momento. Selecione apenas fotos."
+          );
+        }
+        if (validFiles.length === 0) return;
+      }
+
+      const novos: QueuedFile[] = validFiles.map((file) => ({
         id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
         file,
         progress: 0,
@@ -269,10 +288,10 @@ export function ResumableUploader({
       }));
       setFiles((prev) => [...prev, ...novos]);
       toast.success(
-        `${selected.length} arquivo${selected.length > 1 ? "s" : ""} pronto${selected.length > 1 ? "s" : ""} para envio.`
+        `${validFiles.length} ${allowVideos ? "arquivo" : "foto"}${validFiles.length > 1 ? "s" : ""} pronto${validFiles.length > 1 ? "s" : ""} para envio.`
       );
     },
-    [setFiles, stopPreparing]
+    [allowVideos, setFiles, stopPreparing]
   );
 
   function openNativePicker() {
@@ -390,14 +409,16 @@ export function ResumableUploader({
     (f) => f.status === "pending" || f.status === "error"
   ).length;
 
+  const acceptAttr = allowVideos ? "image/*,video/*" : "image/*";
+
   return (
     <div className="space-y-4">
-      {/* Input nativo direto para máxima compatibilidade com Fototeca/Vídeos .MOV no iPhone */}
+      {/* Input nativo direto para máxima compatibilidade com Fototeca no iPhone/Android */}
       <input
         ref={nativeInputRef}
         type="file"
         multiple
-        accept="image/*,video/*"
+        accept={acceptAttr}
         className="hidden"
         onChange={handleNativeFileChange}
         disabled={disabled || isUploading}
@@ -413,17 +434,23 @@ export function ResumableUploader({
           (disabled || isUploading) && "opacity-60 cursor-not-allowed"
         )}
       >
-        <input {...getInputProps({ accept: "image/*,video/*" })} />
+        <input {...getInputProps({ accept: acceptAttr })} />
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary mb-3">
           <CloudUpload className="h-6 w-6" />
         </div>
         <p className="text-sm font-medium">
           {isDragActive
-            ? "Solte as fotos e vídeos aqui..."
-            : "Arraste fotos e vídeos para cá, ou toque para selecionar"}
+            ? allowVideos
+              ? "Solte as fotos e vídeos aqui..."
+              : "Solte as fotos aqui..."
+            : allowVideos
+            ? "Arraste fotos e vídeos para cá, ou toque para selecionar"
+            : "Arraste fotos para cá, ou toque para selecionar"}
         </p>
         <p className="text-xs text-muted-foreground mt-1">
-          Suporte a fotos e vídeos do celular (MOV, MP4, JPG, PNG, HEIC) com envio direto otimizado.
+          {allowVideos
+            ? "Suporte a fotos e vídeos do celular (MOV, MP4, JPG, PNG, HEIC) com envio direto otimizado."
+            : "Suporte a fotos do celular (JPG, PNG, HEIC, WebP). No momento apenas fotos estão habilitadas."}
         </p>
         <div className="mt-3">
           <Button
@@ -437,12 +464,14 @@ export function ResumableUploader({
             }}
           >
             <Upload className="h-3.5 w-3.5" />
-            Selecionar da Galeria / Arquivos
+            {allowVideos ? "Selecionar da Galeria / Arquivos" : "Selecionar Fotos da Galeria"}
           </Button>
         </div>
-        <p className="text-[11px] text-muted-foreground/80 mt-3 max-w-md mx-auto">
-          Dica no iPhone: ao escolher vídeos grandes na Biblioteca de Fotos, o iOS prepara o vídeo antes de retornar ao site. Para carregar mais rápido, toque em <strong>Opções → Formato: Atual</strong> ou selecione 1 vídeo por vez.
-        </p>
+        {allowVideos && (
+          <p className="text-[11px] text-muted-foreground/80 mt-3 max-w-md mx-auto">
+            Dica no iPhone: ao escolher vídeos grandes na Biblioteca de Fotos, o iOS prepara o vídeo antes de retornar ao site. Para carregar mais rápido, toque em <strong>Opções → Formato: Atual</strong> ou selecione 1 vídeo por vez.
+          </p>
+        )}
       </div>
 
       {preparingSelection && (

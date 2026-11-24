@@ -77,11 +77,24 @@ export const updateUsuarioSchema = z.object({
   ativo: z.boolean().optional(),
 });
 
+const turnoEnum = z.enum(["MANHA", "TARDE", "NOITE"]);
+const publicoModoEnum = z.enum(["EXATO", "ESTIMATIVA", "NAO_INFORMADO"]);
+
 export const createEventoSchema = z
   .object({
     titulo: z.string().trim().min(3, "Informe o título da ação").max(200),
     tipo: z.enum(["REALIZADA", "FUTURA"]).optional().default("REALIZADA"),
     dataRealizacao: z.string().min(8, "Informe a data de realização"),
+    dataFim: z.string().optional().nullable(),
+    turnos: z.array(turnoEnum).max(3).optional().default([]),
+    publicoModo: publicoModoEnum.optional().default("NAO_INFORMADO"),
+    publicoExato: z.number().int().min(1).max(1_000_000).optional().nullable(),
+    publicoEstimativa: z.string().trim().max(120).optional().nullable(),
+    servicosSaude: z
+      .array(z.string().trim().min(2).max(120))
+      .max(40)
+      .optional()
+      .default([]),
     local: z.string().trim().min(2, "Informe o local da ação").max(200),
     resumo: z
       .string()
@@ -110,6 +123,12 @@ export const updateEventoSchema = z.object({
   titulo: z.string().trim().min(3).max(200).optional(),
   tipo: z.enum(["REALIZADA", "FUTURA"]).optional(),
   dataRealizacao: z.string().min(8).optional(),
+  dataFim: z.string().optional().nullable(),
+  turnos: z.array(turnoEnum).max(3).optional(),
+  publicoModo: publicoModoEnum.optional(),
+  publicoExato: z.number().int().min(1).max(1_000_000).optional().nullable(),
+  publicoEstimativa: z.string().trim().max(120).optional().nullable(),
+  servicosSaude: z.array(z.string().trim().min(2).max(120)).max(40).optional(),
   local: z.string().trim().min(2).max(200).optional(),
   resumo: z.string().trim().min(10).max(4000).optional(),
   relatorioCompleto: z.string().trim().max(30000).optional(),

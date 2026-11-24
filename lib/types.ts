@@ -4,6 +4,10 @@ export type EventoStatus = "NOVO" | "EM_PRODUCAO" | "PUBLICADO" | "CANCELADA";
 
 export type EventoTipo = "REALIZADA" | "FUTURA";
 
+export type TurnoAcao = "MANHA" | "TARDE" | "NOITE";
+
+export type PublicoModo = "EXATO" | "ESTIMATIVA" | "NAO_INFORMADO";
+
 export type MidiaTipo = "FOTO" | "VIDEO" | "OUTRO";
 
 export type EventoLogAcao =
@@ -66,6 +70,12 @@ export interface EventoDoc {
   titulo: string;
   tipo?: EventoTipo;
   dataRealizacao: string; // ISO string (UTC noon)
+  dataFim?: string | null; // ISO string (UTC noon) se durou mais de 1 dia
+  turnos?: TurnoAcao[];
+  publicoModo?: PublicoModo;
+  publicoExato?: number | null;
+  publicoEstimativa?: string | null;
+  servicosSaude?: string[];
   local: string;
   resumo: string;
   relatorioCompleto: string;
@@ -111,6 +121,13 @@ export interface LoginSlideDoc {
 export interface GeminiConfigDoc {
   apiKey: string;
   model: string;
+  updatedAt: string;
+  updatedByEmail?: string;
+}
+
+export interface SystemSettingsDoc {
+  permitirAcoesFuturas: boolean;
+  permitirEnvioVideos: boolean;
   updatedAt: string;
   updatedByEmail?: string;
 }
